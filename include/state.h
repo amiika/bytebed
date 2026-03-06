@@ -23,11 +23,14 @@ enum VisMode {
 };
 
 enum OpCode : uint8_t { 
-    OP_VAL, OP_T, OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, 
+    OP_VAL, OP_T, OP_LOAD, OP_STORE, OP_STORE_KEEP, OP_POP,
+    OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, 
     OP_AND, OP_OR,  OP_XOR, OP_SHL, OP_SHR, 
     OP_LT,  OP_GT,  OP_COND, OP_NEG, OP_NOT, 
     OP_SIN, OP_COS, OP_TAN, OP_SQRT, OP_LOG, OP_EXP,
-    OP_MIN, OP_MAX, OP_POW, OP_NONE 
+    OP_MIN, OP_MAX, OP_POW, 
+    OP_JMP, OP_PUSH_FUNC, OP_DYN_CALL, OP_DYN_CALL_IF_FUNC, OP_RET,
+    OP_BIND, OP_UNBIND, OP_ASSIGN_VAR, OP_NONE 
 };
 
 struct Theme {
@@ -64,9 +67,10 @@ extern uint8_t last_sample_val;
 extern uint32_t last_draw;
 
 extern const char* classicPresets[10];
+extern const char* testPresets[10];
 extern String slots[10];
-extern String input_buffer; 
-extern String active_eval_formula;
+extern String input_buffer;         
+extern String active_eval_formula;  
 extern String status_msg;
 extern uint32_t status_timer;
 extern String undo_stack[UNDO_DEPTH];
@@ -80,3 +84,4 @@ extern char current_top_text[64];
 
 Layout getLayout();
 uint8_t getLogVolume();
+void saveUndo();

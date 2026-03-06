@@ -37,6 +37,19 @@ const char* classicPresets[10] = {
     "t>>4|t>>5|t%256"
 };
 
+const char* testPresets[10] = {
+    "g(n){n<1?1:n%2<1?g(n/2):2*g(n/2)}; g(t>>7)*(t&128|t>>4)",    // 0: Gould's Fractal Synth
+    "tm(n){n<1?0:n%2<1?tm(n/2):1-tm(n/2)}; t*tm(t>>11)*(t>>5&7)", // 1: Thue-Morse Rhythm Bass
+    "fib(n){n<2?1:fib(n-1)+fib(n-2)}; t*fib((t>>11)%7+3)",        // 2: Fibonacci Arpeggiator
+    "env=(t>>12)%4; env<1?t*3:env<2?t*5:env<3?t*6:t*9",           // 3: Ternary Acid Bassline
+    "osc(x,dt){x*(t>>dt)}; osc(t,5)+osc(t,7)",                    // 4: Multi-Oscillator Chords
+    "lfo=t>>11&15; t*lfo",                                        // 5: Simple LFO Envelope
+    "t*(42&t>>10)",                                               // 6: Classic (Control)
+    "t&t>>8",                                                     // 7: Sierpinski (Control)
+    "(t>>6|t<<1)+(t>>5|t<<3|t>>10)",                              // 8: Classic (Control)
+    "t*(t>>11&t>>8&123&t>>3)"                                     // 9: Classic (Control)
+};
+
 String slots[10];
 String input_buffer = classicPresets[0];
 String active_eval_formula = classicPresets[0];
@@ -58,4 +71,11 @@ Layout getLayout() {
 
 uint8_t getLogVolume() { 
     return (uint8_t)(volume_perc * volume_perc * volume_perc * 255.0f); 
+}
+
+void saveUndo() { 
+    if (input_buffer == undo_stack[undo_ptr]) return; 
+    undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
+    undo_stack[undo_ptr] = input_buffer; 
+    undo_max = undo_ptr; 
 }

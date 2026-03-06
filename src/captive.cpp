@@ -5,7 +5,7 @@
 #include "index_html.h"
 
 void startDnsHijack(void *pvParameters) {
-    dnsServer.start(DNS_PORT, "*", WiFi.softAPIP());
+    dnsServer.start(DNS_PORT, "*", IPAddress(192, 168, 4, 1));
     while(1) {
         dnsServer.processNextRequest();
         vTaskDelay(10); 
@@ -31,15 +31,12 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     if (ret != ESP_OK) return ret;
 
     if (ws_pkt.payload[0] == 'P') {
-        
         String safe_formula = escapeJSON(input_buffer);
         String eval_formula = escapeJSON(active_eval_formula); 
         String top_text = escapeJSON(current_top_text);
         
         String sm_text = "";
-        if (millis() < status_timer && status_msg != "") {
-            sm_text = escapeJSON(status_msg);
-        }
+        if (millis() < status_timer && status_msg != "") sm_text = escapeJSON(status_msg);
 
         char jsonStr[1024]; 
         snprintf(jsonStr, sizeof(jsonStr), 
@@ -69,7 +66,7 @@ static esp_err_t captive_portal_handler(httpd_req_t *req, httpd_err_code_t err) 
     return ESP_OK;
 }
 
-void startBytebeatServer(void *pvParameters) {
+void initBytebeatServer() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.stack_size = 8192; 
@@ -80,8 +77,14 @@ void startBytebeatServer(void *pvParameters) {
     if (httpd_start(&stream_server, &config) == ESP_OK) {
         httpd_register_uri_handler(stream_server, &html_uri);
         httpd_register_uri_handler(stream_server, &ws_uri);
-        
         httpd_register_err_handler(stream_server, HTTPD_404_NOT_FOUND, captive_portal_handler); 
     }
-    vTaskDelete(NULL); 
+}
+
+void stopBytebeatServer() {
+    if (stream_server) {
+        httpd_stop(stream_server);
+        stream_server = NULL;
+    }
+    dnsServer.stop();
 }
