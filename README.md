@@ -8,8 +8,12 @@ Woop woop. It beeps!
 + Infix and RPN compiler & bytecode vm
 + Bytecode decompiler (changes between Infix & RPN via tab)
 + Syntax validator (Prevents crashes)
-+ Load & Save slots fn + 0-9
++ Load & Save slots opt/alt + 0-9
 + Undo & Redo ctrl + z / r
++ Classic visualizations fn + 1-4
++ History view fn + 0
++ Theme fn + t
++ Synced captive wifi portal fn + w
 
 # TODO
 
