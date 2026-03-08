@@ -18,6 +18,7 @@ Woop woop. It beeps!
 # TODO
 
 - Variables as global state?
+- Variable chaining and additions?
 - Functions as separate macro stack?
 - Floating point & Floatbeat support?
 
