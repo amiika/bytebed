@@ -38,16 +38,16 @@ const char* classicPresets[10] = {
 };
 
 const char* testPresets[10] = {
-    "g(n){n<1?1:n%2<1?g(n/2):2*g(n/2)}; g(t>>7)*(t&128|t>>4)",    // 0: Gould's Fractal Synth
-    "tm(n){n<1?0:n%2<1?tm(n/2):1-tm(n/2)}; t*tm(t>>11)*(t>>5&7)", // 1: Thue-Morse Rhythm Bass
-    "fib(n){n<2?1:fib(n-1)+fib(n-2)}; t*fib((t>>11)%7+3)",        // 2: Fibonacci Arpeggiator
-    "env=(t>>12)%4; env<1?t*3:env<2?t*5:env<3?t*6:t*9",           // 3: Ternary Acid Bassline
-    "osc(x,dt){x*(t>>dt)}; osc(t,5)+osc(t,7)",                    // 4: Multi-Oscillator Chords
-    "lfo=t>>11&15; t*lfo",                                        // 5: Simple LFO Envelope
-    "t*(42&t>>10)",                                               // 6: Classic (Control)
-    "t&t>>8",                                                     // 7: Sierpinski (Control)
-    "(t>>6|t<<1)+(t>>5|t<<3|t>>10)",                              // 8: Classic (Control)
-    "t*(t>>11&t>>8&123&t>>3)"                                     // 9: Classic (Control)
+    "g(n){n<1?1:n%2<1?g(n/2):2*g(n/2)}; g(t>>7)*(t&128|t>>4)", 
+    "tm(n){n<1?0:n%2<1?tm(n/2):1-tm(n/2)}; t*tm(t>>11)*(t>>5&7)",
+    "fib(n){n<2?1:fib(n-1)+fib(n-2)}; t*fib((t>>11)%7+3)",
+    "env=(t>>12)%4; env<1?t*3:env<2?t*5:env<3?t*6:t*9",
+    "osc(x,dt){x*(t>>dt)}; osc(t,5)+osc(t,7)",
+    "lfo=t>>11&15; t*lfo",
+    "a=t*2**([1,2,3][t>>22&3]/4),b=t*2**([1,2,3][t>>11&63]/12+2),(3*a^t>>6&256/'1112'[t>>14&3]-1|a)%256*2/3+(b^b*2)%256/3",                                               // 6: Classic (Control)
+    "a=[1,2,3][(t>>10)%4]*[2,4,5,6][(t>>16)%4]*t,b=a%32+t>>a,c=b%t+a,[(t>>a)+b,c]",                                  
+    "t*(4|t>>13&3)>>(~t>>11&1)&128|t*(t>>11&t>>13)*(~t>>9&3)&127", 
+    "t"
 };
 
 String slots[10];

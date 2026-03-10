@@ -6,11 +6,9 @@
 #include "captive.h"
 #include "../test/tests.h" 
 
-// Development Flags
-const bool TEST_PRESETS = true; 
+const bool TEST_PRESETS = false; 
 const bool REWRITE_PRESETS = false; 
 
-// Playback Task
 void playBytebeat(void *pvParameters) {
     int16_t local_mono_buf[AUDIO_BUF_SIZE];
     while(1) {
@@ -145,27 +143,22 @@ void loop() {
         else if (st.fn) {
             // WIFI Toggle
             if (M5Cardputer.Keyboard.isKeyPressed('W') || M5Cardputer.Keyboard.isKeyPressed('w')) {
-                is_streaming = !is_streaming;
-                if (is_streaming) {
+                if (!is_streaming) {
                     WiFi.mode(WIFI_AP);
                     delay(100); 
                     WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
                     if (WiFi.softAP("BYTEBED")) {
+                        is_streaming = true;
                         initBytebeatServer();
                         xTaskCreatePinnedToCore(startDnsHijack, "DNS Server", 2048, NULL, 1, NULL, 1);
                         status_msg = "WIFI ACTIVE";
                     } else {
-                        is_streaming = false;
                         status_msg = "WIFI FAIL";
                     }
+                    status_timer = millis() + 1500;
                 } else {
-                    stopBytebeatServer();
-                    WiFi.softAPdisconnect(true);
-                    WiFi.mode(WIFI_STA); 
-                    WiFi.disconnect();
-                    status_msg = "WIFI STOPPED";
+                    ESP.restart();
                 }
-                status_timer = millis() + 1500;
             }
             if (M5Cardputer.Keyboard.isKeyPressed('T') || M5Cardputer.Keyboard.isKeyPressed('t')) { 
                 current_theme_idx = (current_theme_idx + 1) % 3; 

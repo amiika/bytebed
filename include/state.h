@@ -1,10 +1,15 @@
 #pragma once
 
+#ifndef __EMSCRIPTEN__
 #include <M5Cardputer.h>
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <esp_http_server.h>
 #include <DNSServer.h>
+#else
+#include "Arduino.h" 
+#endif
+
 #include <vector>
 #include <map>
 
@@ -15,32 +20,25 @@
 #define UNDO_DEPTH         20
 
 enum VisMode { 
-    VIS_WAV_WIRE, 
-    VIS_DIA_AMP, 
-    VIS_DIA_BIT, 
-    VIS_WAV_ORIG,
-    VIS_HISTORY 
+    VIS_WAV_WIRE, VIS_DIA_AMP, VIS_DIA_BIT, VIS_WAV_ORIG, VIS_HISTORY 
 };
 
 enum OpCode : uint8_t { 
     OP_VAL, OP_T, OP_LOAD, OP_STORE, OP_STORE_KEEP, OP_POP,
     OP_ADD, OP_SUB, OP_MUL, OP_DIV, OP_MOD, 
     OP_AND, OP_OR,  OP_XOR, OP_SHL, OP_SHR, 
-    OP_LT,  OP_GT,  OP_COND, OP_NEG, OP_NOT, 
+    OP_LT,  OP_GT,  OP_EQ,  OP_NEQ, OP_LTE, OP_GTE,
+    OP_COND, OP_NEG, OP_NOT, OP_BNOT,               
     OP_SIN, OP_COS, OP_TAN, OP_SQRT, OP_LOG, OP_EXP,
     OP_MIN, OP_MAX, OP_POW, 
     OP_JMP, OP_PUSH_FUNC, OP_DYN_CALL, OP_DYN_CALL_IF_FUNC, OP_RET,
-    OP_BIND, OP_UNBIND, OP_ASSIGN_VAR, OP_NONE 
+    OP_BIND, OP_UNBIND, OP_ASSIGN_VAR, 
+    OP_VEC, OP_AT, OP_NONE 
 };
 
 struct Theme {
-    uint16_t primaryColor;
-    uint16_t dimColor;
-    uint16_t bg;
-    uint16_t textColor;
-    uint8_t r_base;
-    uint8_t g_base;
-    uint8_t b_base;
+    uint16_t primaryColor; uint16_t dimColor; uint16_t bg; uint16_t textColor;
+    uint8_t r_base; uint8_t g_base; uint8_t b_base;
 };
 
 extern Theme themes[3];
@@ -49,16 +47,18 @@ extern int current_theme_idx;
 
 struct Layout { int input_y; int vis_y; int vis_h; };
 
+#ifndef __EMSCRIPTEN__
 extern httpd_handle_t stream_server;
 extern DNSServer dnsServer;
 extern const byte DNS_PORT;
 extern bool is_streaming;
 
 extern Preferences prefs;
-extern VisMode current_vis;
 extern LGFX_Sprite canvas;
 extern LGFX_Sprite bg_sprite; 
+#endif
 
+extern VisMode current_vis;
 extern int drawScale; 
 extern float volume_perc; 
 extern int32_t t_raw;

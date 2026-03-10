@@ -1,5 +1,3 @@
-#pragma once
-
 const char* index_html = R"rawliteral(
 <!DOCTYPE html>
 <html>
@@ -24,13 +22,54 @@ const char* index_html = R"rawliteral(
     <div id="screen-container">
         <canvas id="m5"></canvas>
         <div id="overlay">
-            <div>BYTE ME!</div>
+            <div id="loading-txt">LOADING WASM...</div>
         </div>
         <button id="hijack-btn" onclick="toggleHijack(event)">HIJACK</button>
-        <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" oninput="updateHijack()" readonly></textarea>
+        <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off" readonly></textarea>
     </div>
     
     <script>
+        let wasm = null;
+        let inputBufferPtr = 0;
+        let state = null; // Hoisted so compileToWASM can access it safely
+        
+        WebAssembly.instantiateStreaming(fetch('/bytebed.wasm'), {
+            env: { memory: new WebAssembly.Memory({ initial: 256 }) }
+        }).then(results => {
+            wasm = results.instance.exports;
+            
+            // HIGH IMPACT FIX: Run C++ global constructors so std::map and std::vector populate!
+            if (wasm._initialize) {
+                wasm._initialize(); 
+            } else if (wasm.__wasm_call_ctors) {
+                wasm.__wasm_call_ctors(); 
+            }
+
+            inputBufferPtr = wasm.get_input_buffer();
+            document.getElementById('loading-txt').innerText = "BYTE ME!";
+        }).catch(err => {
+            console.error("WASM failed to load", err);
+            document.getElementById('loading-txt').innerText = "WASM INIT FAIL";
+        });
+
+        function compileToWASM(str) {
+            if (!wasm) return false;
+            const encoder = new TextEncoder();
+            const view = new Uint8Array(wasm.memory.buffer);
+            const encoded = encoder.encode(str);
+            view.set(encoded, inputBufferPtr);
+            view[inputBufferPtr + encoded.length] = 0; 
+            
+            // HIGH IMPACT FIX: Pass the actual RPN mode state, defaulting to false if unknown
+            let is_rpn = (state && state.r) ? true : false;
+            return wasm.wasm_compile(is_rpn); 
+        }
+
+        function executeWASM(t) {
+            if (!wasm) return 128;
+            return wasm.wasm_execute(t);
+        }
+
         let audioCtx, audioNode;
         let c, n;
         
@@ -51,15 +90,10 @@ const char* index_html = R"rawliteral(
         const bgPixels = new Uint32Array(bgImg.data.buffer);
         bgPixels.fill(0xFF000000); 
 
-        let state = null;
-        let last_eval_str = "";
-        let vis_f = (t) => 128; 
-        
         let t_audio = 0; 
         let t_vis = 0;   
         let target_vis = 0;
         let last_val = 128;
-        
         let is_hijacked = false;
 
         let colorLUT32 = new Uint32Array(256);
@@ -97,6 +131,12 @@ const char* index_html = R"rawliteral(
             if (e.key === 'Enter') {
                 e.preventDefault();
                 this.blur();
+                if (is_hijacked) {
+                    updateHijack(); 
+                    if (ws.readyState === WebSocket.OPEN) {
+                        ws.send('E' + this.value); 
+                    }
+                }
             }
         });
 
@@ -115,8 +155,7 @@ const char* index_html = R"rawliteral(
                 ed.blur();
                 if (state) {
                     ed.value = state.f;
-                    last_eval_str = state.ef;
-                    try { vis_f = new Function('t', 'with(Math) return (' + state.ef + ')&255;'); } catch(err) {}
+                    compileToWASM(state.f);
                 }
             }
         };
@@ -125,12 +164,10 @@ const char* index_html = R"rawliteral(
             if (!is_hijacked) return;
             let ed = document.getElementById('editor');
             ed.value = ed.value.replace(/[\r\n]/g, ''); 
-            try {
-                vis_f = new Function('t', 'with(Math) return (' + ed.value + ')&255;');
-            } catch(err) {} 
+            compileToWASM(ed.value);
         };
 
-        const ws = new WebSocket('ws://192.168.4.1/ws');
+        const ws = new WebSocket('ws://' + location.hostname + '/ws'); // Updated to dynamic hostname just in case
         
         ws.onmessage = function(event) {
             try {
@@ -149,15 +186,16 @@ const char* index_html = R"rawliteral(
 
                 if (!is_hijacked) {
                     let ed = document.getElementById('editor');
-                    if (ed.value !== newState.f) ed.value = newState.f;
+                    
+                    if (!state || state.f !== newState.f) {
+                        ed.value = newState.f;
+                        // State is assigned below, but compileToWASM uses it, so we temporarily assign it here too
+                        state = newState; 
+                        compileToWASM(newState.f);
+                    }
                     
                     let input_h = newState.f.length > 80 ? 60 : 25;
                     ed.style.height = (input_h / 135 * 100) + '%';
-                    
-                    if (newState.ef !== last_eval_str) {
-                        last_eval_str = newState.ef;
-                        try { vis_f = new Function('t', 'with(Math) return (' + newState.ef + ')&255;'); } catch(e) {}
-                    }
                 }
 
                 if (c) {
@@ -180,6 +218,8 @@ const char* index_html = R"rawliteral(
         setInterval(() => { if (ws.readyState === WebSocket.OPEN) ws.send('P'); }, 33);
 
         document.getElementById('overlay').addEventListener('click', async function() {
+            if (!wasm) return;
+            
             this.style.opacity = '0';
             setTimeout(() => this.style.display = 'none', 300);
             
@@ -190,7 +230,7 @@ const char* index_html = R"rawliteral(
                 n.onaudioprocess = function(e) {
                     let out = e.outputBuffer.getChannelData(0);
                     for (let i=0; i<out.length; i++) {
-                        out[i] = (state && state.p) ? ((vis_f(t_audio) & 255) - 128) / 128.0 : 0;
+                        out[i] = (state && state.p) ? ((executeWASM(t_audio)) - 128) / 128.0 : 0;
                         t_audio++; 
                     }
                 };
@@ -232,7 +272,7 @@ const char* index_html = R"rawliteral(
                 
                 let drawn = false;
                 while (t_vis < chunk_end) {
-                    let val = vis_f(t_vis); 
+                    let val = executeWASM(t_vis);
                     let x = Math.floor(t_vis / scale_pow) % w;
                     
                     if (t_vis % scale_pow === 0) {

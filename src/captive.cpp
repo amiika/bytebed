@@ -3,6 +3,7 @@
 #include "ui.h"
 #include <WiFi.h>
 #include "index_html.h"
+#include "wasm_binary.h"
 
 void startDnsHijack(void *pvParameters) {
     dnsServer.start(DNS_PORT, "*", IPAddress(192, 168, 4, 1));
@@ -59,6 +60,12 @@ static esp_err_t htmlHandler(httpd_req_t *req) {
     return httpd_resp_send(req, index_html, HTTPD_RESP_USE_STRLEN);
 }
 
+static esp_err_t wasmHandler(httpd_req_t *req) {
+    httpd_resp_set_type(req, "application/wasm");
+    httpd_resp_set_hdr(req, "Cache-Control", "public, max-age=31536000");
+    return httpd_resp_send(req, (const char*)bytebed_wasm, bytebed_wasm_len);
+}
+
 static esp_err_t captive_portal_handler(httpd_req_t *req, httpd_err_code_t err) {
     httpd_resp_set_status(req, "302 Found");
     httpd_resp_set_hdr(req, "Location", "http://192.168.4.1/");
@@ -71,11 +78,13 @@ void initBytebeatServer() {
     config.server_port = 80;
     config.stack_size = 8192; 
 
-    httpd_uri_t html_uri =  { .uri = "/", .method = HTTP_GET, .handler = htmlHandler, .user_ctx = NULL };
-    httpd_uri_t ws_uri = { .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .user_ctx = NULL, .is_websocket = true };
+    httpd_uri_t html_uri = { .uri = "/", .method = HTTP_GET, .handler = htmlHandler, .user_ctx = NULL };
+    httpd_uri_t wasm_uri = { .uri = "/bytebed.wasm", .method = HTTP_GET, .handler = wasmHandler, .user_ctx = NULL };
+    httpd_uri_t ws_uri   = { .uri = "/ws", .method = HTTP_GET, .handler = ws_handler, .user_ctx = NULL, .is_websocket = true };
 
     if (httpd_start(&stream_server, &config) == ESP_OK) {
         httpd_register_uri_handler(stream_server, &html_uri);
+        httpd_register_uri_handler(stream_server, &wasm_uri); // Enable WASM serving
         httpd_register_uri_handler(stream_server, &ws_uri);
         httpd_register_err_handler(stream_server, HTTPD_404_NOT_FOUND, captive_portal_handler); 
     }

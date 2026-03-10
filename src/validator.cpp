@@ -10,16 +10,9 @@ bool validateProgram(uint8_t bank, int len) {
         }
     }
 
-    // Variable stack
     static Val v_stack[256]; int sp = -1;
-    
-    // Call stack
     static int32_t c_stack[256]; int csp = -1;
-    
-    // Local variable stack
-    static Val l_vars[64][8];
-    
-    // Pointer stack
+    static Val l_vars[64][32];
     static int l_vsp[64];
 
     memset(l_vars, 0, sizeof(l_vars));
@@ -63,28 +56,35 @@ bool validateProgram(uint8_t bank, int len) {
                 break;
             case OP_BIND:
                 if (sp<0) return false;
-                if (l_vsp[inst.val] < 7) l_vsp[inst.val]++;
+                if (l_vsp[inst.val] < 31) l_vsp[inst.val]++;
                 l_vars[inst.val][l_vsp[inst.val]] = v_stack[sp--];
                 break;
             case OP_UNBIND:
                 if (l_vsp[inst.val] > 0) l_vsp[inst.val]--;
                 break;
+            
+            case OP_VEC: break; 
+            case OP_AT: {
+                if (sp < 1) return false;
+                sp--; // pop idx
+                int32_t size = v_stack[sp--].v;
+                if (size <= 0 || sp < size - 1) return false;
+                sp -= size; // safely drop array
+                v_stack[++sp] = {0, 0}; // push result
+                break;
+            }
+
             case OP_COND: {
                 if (sp<2) return false;
-                Val f = v_stack[sp--];
-                Val tv = v_stack[sp--];
-                Val c = v_stack[sp--]; 
+                Val f = v_stack[sp--]; Val tv = v_stack[sp--]; Val c = v_stack[sp--]; 
                 Val target = c.v ? tv : f;
-                if (target.type == 1) { 
-                    if (csp < 255) { c_stack[++csp] = pc; pc = target.v - 1; }
-                } else {
-                    if (sp >= 254) return false;
-                    v_stack[++sp] = target;
-                }
+                if (target.type == 1) { if (csp < 255) { c_stack[++csp] = pc; pc = target.v - 1; } } 
+                else { if (sp >= 254) return false; v_stack[++sp] = target; }
                 break; 
             }
             case OP_NEG: if(sp<0) return false; v_stack[sp].v = -v_stack[sp].v; break;
             case OP_NOT: if(sp<0) return false; v_stack[sp].v = !v_stack[sp].v; break;
+            case OP_BNOT: if(sp<0) return false; v_stack[sp].v = ~v_stack[sp].v; break; 
             case OP_SIN: if(sp<0) return false; v_stack[sp].v = (int32_t)(128.0f + sinf(v_stack[sp].v/128.0f*M_PI)*127.0f); break;
             case OP_COS: if(sp<0) return false; v_stack[sp].v = (int32_t)(128.0f + cosf(v_stack[sp].v/128.0f*M_PI)*127.0f); break;
             case OP_TAN: if(sp<0) return false; v_stack[sp].v = (int32_t)(128.0f + tanf(v_stack[sp].v/128.0f*M_PI)*127.0f); break;
@@ -100,6 +100,10 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_SHR: if(sp<1) return false; v_stack[sp-1].v >>= v_stack[sp].v; sp--; break;
             case OP_LT:  if(sp<1) return false; v_stack[sp-1].v = (v_stack[sp-1].v < v_stack[sp].v); sp--; break;
             case OP_GT:  if(sp<1) return false; v_stack[sp-1].v = (v_stack[sp-1].v > v_stack[sp].v); sp--; break;
+            case OP_EQ:  if(sp<1) return false; v_stack[sp-1].v = (v_stack[sp-1].v == v_stack[sp].v); sp--; break;
+            case OP_NEQ: if(sp<1) return false; v_stack[sp-1].v = (v_stack[sp-1].v != v_stack[sp].v); sp--; break;
+            case OP_LTE: if(sp<1) return false; v_stack[sp-1].v = (v_stack[sp-1].v <= v_stack[sp].v); sp--; break;
+            case OP_GTE: if(sp<1) return false; v_stack[sp-1].v = (v_stack[sp-1].v >= v_stack[sp].v); sp--; break;
             case OP_MIN: if(sp<1) return false; v_stack[sp-1].v = std::min(v_stack[sp-1].v, v_stack[sp].v); sp--; break;
             case OP_MAX: if(sp<1) return false; v_stack[sp-1].v = std::max(v_stack[sp-1].v, v_stack[sp].v); sp--; break;
             case OP_POW: if(sp<1) return false; v_stack[sp-1].v = (int32_t)powf((float)v_stack[sp-1].v, (float)v_stack[sp].v); sp--; break;

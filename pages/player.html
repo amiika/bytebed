@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bytebed</title>
+    <style>
+        body { background: #050505; color: #00ff00; font-family: 'Courier New', monospace; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; cursor: pointer; }
+        #container { position: relative; width: 800px; height: 450px; background: #000; border: 1px solid #111; border-radius: 4px; cursor: default; }
+        canvas { width: 100%; height: 100%; display: block; background: transparent; pointer-events: none; }
+        
+        #ui { position: absolute; bottom: 0; left: 0; width: 100%; padding: 25px; box-sizing: border-box; background: linear-gradient(to top, rgba(0,0,0,1) 0%, transparent 100%); display: flex; flex-direction: column; }
+        textarea { width: 100%; background: transparent; color: #00ff00; border: none; font-family: inherit; font-size: 24px; outline: none; resize: none; border-left: 2px solid #004400; padding-left: 15px; overflow: hidden; max-height: 250px; transition: height 0.1s ease-out; }
+
+        .meta { position: absolute; top: 18px; left: 18px; font-size: 20px; color: #00ff00; letter-spacing: 1px; opacity: 0.8; }
+        .controls { position: absolute; top: 15px; right: 15px; display: flex; gap: 10px; font-size: 10px; align-items: center; }
+        
+        .btn { 
+            cursor: pointer; user-select: none; transition: all 0.15s ease; white-space: nowrap;
+            color: #00ff00; border: 1px solid #004400; 
+            padding: 4px 12px; background: transparent; text-decoration: none;
+            text-transform: uppercase;
+            text-align: center;
+            min-width: 60px;
+        }
+        
+        .btn:hover { background: rgba(0,255,0,0.05); border-color: #00ff00; box-shadow: 0 0 8px rgba(0,255,0,0.1); }
+
+        .btn.active { 
+            background: rgba(0,255,0,0.08); 
+            border-color: #00ff00;
+            color: #00ff00;
+            box-shadow: inset 0 0 4px rgba(0,255,0,0.1);
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div class="meta" id="status">BYTEBED</div>
+        
+        <div class="controls">
+            <span id="play-btn" class="btn" onclick="togglePlay(event)">START</span>
+            <span id="mode-btn" class="btn active" onclick="toggleMode(event)">INFIX</span>
+            <span id="btn-auto" class="btn active" onclick="toggleAuto(event)">AUTO</span>
+            <span class="btn" onclick="resetT(event)">RESET</span>
+            <span id="share-btn" class="btn" onclick="shareCode(event)">SHARE</span>
+        </div>
+
+        <canvas id="viz"></canvas>
+
+        <div id="ui">
+            <textarea id="formula" spellcheck="false" placeholder="Shift+Enter for newline...">t * (t >> 8 | t >> 11)</textarea>
+        </div>
+    </div>
+    <script src="emulator.js"></script>
+</body>
+</html>

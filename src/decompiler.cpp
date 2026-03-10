@@ -13,7 +13,6 @@ String decompile(bool to_rpn) {
     int len = prog_len_bank[bank];
     if (len == 0) return "";
     
-    // Prepass to determine function arities
     std::map<int, int> is_func_arity;
     for (int i = 0; i < len; i++) {
         if (program_bank[bank][i].op == OP_PUSH_FUNC) {
@@ -31,7 +30,6 @@ String decompile(bool to_rpn) {
         }
     }
 
-    // Propagate arity 
     bool changed = true;
     while (changed) {
         changed = false;
@@ -48,43 +46,47 @@ String decompile(bool to_rpn) {
         }
     }
 
-    // RPN decompilation
     if (to_rpn) {
-        String res = ""; 
+        std::vector<String> toks;
         for (int i = 0; i < len; i++) {
             OpCode op = program_bank[bank][i].op;
-            if (op == OP_VAL) res += String(program_bank[bank][i].val) + " ";
-            else if (op == OP_T) res += "t "; 
+            if (op == OP_VAL) toks.push_back(String(program_bank[bank][i].val));
+            else if (op == OP_T) toks.push_back("t"); 
             else if (op == OP_LOAD) {
                 int id = program_bank[bank][i].val;
                 if (i + 1 < len && (program_bank[bank][i+1].op == OP_DYN_CALL_IF_FUNC || program_bank[bank][i+1].op == OP_DYN_CALL)) {
-                    res += getVarName(id) + " "; i++; 
+                    toks.push_back(getVarName(id)); i++; 
                 } else {
-                    if (is_func_arity.count(id)) res += "{" + getVarName(id) + "} ";
-                    else res += getVarName(id) + " ";
+                    if (is_func_arity.count(id)) toks.push_back("{" + getVarName(id) + "}");
+                    else toks.push_back(getVarName(id));
                 }
             }
-            else if (op == OP_STORE || op == OP_STORE_KEEP) { res += getVarName(program_bank[bank][i].val) + " = "; }
+            else if (op == OP_STORE || op == OP_STORE_KEEP) toks.push_back(getVarName(program_bank[bank][i].val) + " =");
             else if (op == OP_PUSH_FUNC) {
                 int j = i + 1; std::vector<String> pnames;
                 while (j < len && program_bank[bank][j].op == OP_BIND) { pnames.insert(pnames.begin(), getVarName(program_bank[bank][j].val)); j++; }
-                if (pnames.empty()) res += "() { "; 
+                if (pnames.empty()) toks.push_back("() {"); 
                 else {
-                    String params = "( ";
+                    String params = "(";
                     for (size_t k = 0; k < pnames.size(); k++) params += pnames[k] + (k == pnames.size() - 1 ? "" : " ");
-                    params += ") { "; res += params;
+                    params += ") {"; toks.push_back(params);
                 }
                 i = j - 1; 
             }
-            else if (op == OP_RET) res += "} ";
-            else if (op >= OP_ADD && op <= OP_POW) res += getOpSym(op) + " ";
-            else if (op == OP_COND) res += "? ";
+            else if (op == OP_RET) toks.push_back("}");
+            else if (op == OP_VEC) toks.push_back("_");
+            else if (op == OP_AT) toks.push_back("@");
+            else if (op >= OP_ADD && op <= OP_POW) {
+                if (op == OP_NEG) { if (!toks.empty()) toks.back() = "-" + toks.back(); } 
+                else { toks.push_back(getOpSym(op)); }
+            }
+            else if (op == OP_COND) toks.push_back("?");
         }
-        res.trim(); 
+        String res = "";
+        for (size_t k = 0; k < toks.size(); k++) res += toks[k] + (k == toks.size() - 1 ? "" : " ");
         return res;
     }
     
-    // Infix decompilation
     std::vector<Node> st;
     for (int i = 0; i < len; i++) {
         OpCode op = program_bank[bank][i].op; 
@@ -93,6 +95,25 @@ String decompile(bool to_rpn) {
         if (op == OP_VAL) st.push_back({String(program_bank[bank][i].val), 10, false, false});
         else if (op == OP_T) st.push_back({"t", 10, false, false});
         else if (op == OP_LOAD) st.push_back({getVarName(program_bank[bank][i].val), 10, false, false});
+        else if (op == OP_VEC) {
+            if (st.empty()) continue;
+            int size = st.back().s.toInt(); st.pop_back();
+            String arr = "[";
+            std::vector<Node> elems;
+            for (int a = 0; a < size; a++) {
+                if (st.empty()) break;
+                elems.push_back(st.back()); st.pop_back();
+            }
+            for (int a = elems.size() - 1; a >= 0; a--) arr += elems[a].s + (a == 0 ? "" : ", ");
+            arr += "]";
+            st.push_back({arr, 100, false, false});
+        }
+        else if (op == OP_AT) {
+            if (st.size() < 2) continue;
+            Node idx = st.back(); st.pop_back();
+            Node arr = st.back(); st.pop_back();
+            st.push_back({arr.s + "[" + idx.s + "]", 100, false, false});
+        }
         else if (op == OP_PUSH_FUNC) {
             int j = i + 1; std::vector<String> pnames;
             while (j < len && program_bank[bank][j].op == OP_BIND) { pnames.insert(pnames.begin(), getVarName(program_bank[bank][j].val)); j++; }
@@ -121,21 +142,13 @@ String decompile(bool to_rpn) {
         else if (op == OP_DYN_CALL || op == OP_DYN_CALL_IF_FUNC) {
             if (st.empty()) continue;
             Node func = st.back(); st.pop_back();
-            
-            bool is_known_func = false;
-            int args_to_fold = 0;
-            
-            if (op == OP_DYN_CALL) {
-                is_known_func = true; args_to_fold = program_bank[bank][i].val;
-            } else {
+            bool is_known_func = false; int args_to_fold = 0;
+            if (op == OP_DYN_CALL) { is_known_func = true; args_to_fold = program_bank[bank][i].val; } 
+            else {
                 int fid = getVarId(func.s);
-                if (is_func_arity.count(fid)) {
-                    is_known_func = true; args_to_fold = is_func_arity[fid];
-                } else if (func.s.startsWith("(") || func.s.startsWith("{") || func.s == "f" || func.s == "g") {
-                    is_known_func = true; args_to_fold = 1; 
-                }
+                if (is_func_arity.count(fid)) { is_known_func = true; args_to_fold = is_func_arity[fid]; } 
+                else if (func.s.startsWith("(") || func.s.startsWith("{") || func.s == "f" || func.s == "g") { is_known_func = true; args_to_fold = 1; }
             }
-            
             if (is_known_func) {
                 String arg_str = "";
                 for (int a = 0; a < args_to_fold; a++) {
@@ -144,9 +157,7 @@ String decompile(bool to_rpn) {
                     arg_str = arg.s + (arg_str.length() > 0 ? ", " : "") + arg_str;
                 }
                 st.push_back({func.s + "(" + arg_str + ")", 10, false, false});
-            } else {
-                st.push_back({func.s, 10, false, false}); 
-            }
+            } else { st.push_back({func.s, 10, false, false}); }
         }
         else if (op == OP_COND) {
             if (st.size() < 3) continue;
@@ -162,8 +173,17 @@ String decompile(bool to_rpn) {
             st.push_back({c.s + " ? " + unwrap(tv) + " : " + unwrap(f), 0, false, false});
         } 
         else if (op >= OP_ADD && op <= OP_POW) {
-            String sym = getOpSym(op); bool u = (op == OP_NEG || op == OP_NOT), is_bin = false; 
-            for (auto const& f : mathLibrary) { if (f.code == op) { if (f.unary) u = true; else is_bin = true; break; } }
+            String sym = getOpSym(op); if (op == OP_NEG) sym = "-";
+            bool u = (op == OP_NEG || op == OP_NOT || op == OP_BNOT), is_bin = false; 
+            
+            for (int _m = 0; _m < mathLibrarySize; _m++) { 
+                if (mathLibrary[_m].code == op) { 
+                    if (mathLibrary[_m].unary) u = true; 
+                    else is_bin = true; 
+                    break; 
+                } 
+            }
+            
             if (st.empty()) continue;
             if (u) { Node a = st.back(); st.pop_back(); st.push_back({sym + "(" + a.s + ")", 10, false, false}); }
             else {
