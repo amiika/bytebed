@@ -1,6 +1,9 @@
 #pragma once
 #include "state.h"
 
+static inline float getF(int32_t v) { union { int32_t i; float f; } u; u.i = v; return u.f; }
+static inline int32_t setF(float f) { union { int32_t i; float f; } u; u.f = f; return u.i; }
+
 struct Instruction {
     OpCode op;
     int32_t val;
@@ -27,9 +30,7 @@ extern Instruction program_bank[2][256];
 extern int prog_len_bank[2];
 extern volatile uint8_t active_bank;
 
-extern Val vars[64][32];
-extern int vsp[64];
-
+extern Val vars[64];
 extern int var_count;
 
 extern const MathFunc mathLibrary[9];

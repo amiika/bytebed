@@ -1,16 +1,19 @@
 #include "vm.h"
 #include <math.h>
+#include <algorithm>
 
 Instruction program_bank[2][256];
 int prog_len_bank[2] = {0, 0};
 volatile uint8_t active_bank = 0;
 
-Val vars[64][32];
-int vsp[64];
+// Shadow Stack Optimization Intact! 14KB Saved!
+Val vars[64];
 
+// Safely replaces std::map for variable names
 String symNames[64];
 int var_count = 0;
 
+// Baked directly into binary .rodata, no constructors needed!
 const MathFunc mathLibrary[] = {
     {"sin",  OP_SIN,  true},  {"cos",  OP_COS,  true},  {"tan",  OP_TAN,  true},
     {"sqrt", OP_SQRT, true},  {"log",  OP_LOG,  true},  {"exp",  OP_EXP,  true},
@@ -78,113 +81,166 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     int len = prog_len_bank[bank];
     if (len == 0) return 128;
     
-    memset(vsp, 0, sizeof(vsp));
-    
     static Val stack[256]; int sp = -1;
     static int32_t call_stack[256]; int csp = -1;
+    
+    static Val shadow_val[256]; int ssp = -1;
 
-    for (int pc = 0; pc < len; pc++) {
-        Instruction& inst = program_bank[bank][pc];
-        switch (inst.op) {
-            case OP_VAL: stack[++sp] = {0, inst.val}; break;
-            case OP_T:   stack[++sp] = {0, t}; break;
-            case OP_LOAD: stack[++sp] = vars[inst.val][vsp[inst.val]]; break;
-            case OP_STORE: if(sp>=0) vars[inst.val][vsp[inst.val]] = stack[sp--]; break;
-            case OP_STORE_KEEP: if(sp>=0) vars[inst.val][vsp[inst.val]] = stack[sp]; break;
-            case OP_POP: if(sp>=0) sp--; break;
-            case OP_JMP: pc = inst.val - 1; break;
-            case OP_PUSH_FUNC: stack[++sp] = {1, pc + 1}; pc = inst.val - 1; break;
-            case OP_DYN_CALL:
-                if (stack[sp].type == 1) { 
-                    if (csp < 255) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
-                    else sp--; 
-                } else {
-                    int args = inst.val;
-                    if (sp >= args) sp -= (args + 1); else sp = -1;
-                    stack[++sp] = {0, 0}; 
-                }
-                break;
-            case OP_DYN_CALL_IF_FUNC:
-                if (stack[sp].type == 1) { 
-                    if (csp < 255) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
-                    else sp--;
-                }
-                break;
-            case OP_RET: if (csp >= 0) pc = call_stack[csp--]; else pc = len; break;
-            case OP_BIND: 
-                if (sp >= 0) {
-                    if (vsp[inst.val] < 31) vsp[inst.val]++; 
-                    vars[inst.val][vsp[inst.val]] = stack[sp--];
-                }
-                break;
-            case OP_UNBIND: if (vsp[inst.val] > 0) vsp[inst.val]--; break;
-            case OP_VEC: 
-                if (sp >= 0) stack[sp].type = 2; 
-                break; 
-            case OP_AT: {
-                if (sp < 1) return 128; 
-                int32_t idx = stack[sp--].v;
-                int32_t size = stack[sp--].v;
-                if (size <= 0 || sp < size - 1) return 128; 
-                idx = ((idx % size) + size) % size;
-                int32_t res = stack[sp - size + 1 + idx].v;
-                sp -= size; 
-                stack[++sp] = {0, res}; 
-                break;
-            }
-            case OP_NEG: stack[sp].v = -stack[sp].v; break;
-            case OP_NOT: stack[sp].v = !stack[sp].v; break;
-            case OP_BNOT: stack[sp].v = ~stack[sp].v; break; 
-            case OP_SIN: stack[sp].v = (int32_t)(128.0f + sinf(stack[sp].v/128.0f*M_PI)*127.0f); break;
-            case OP_COS: stack[sp].v = (int32_t)(128.0f + cosf(stack[sp].v/128.0f*M_PI)*127.0f); break;
-            case OP_TAN: stack[sp].v = (int32_t)(128.0f + tanf(stack[sp].v/128.0f*M_PI)*127.0f); break;
-            case OP_SQRT: stack[sp].v = stack[sp].v >= 0 ? (int32_t)sqrtf((float)stack[sp].v) : 0; break;
-            case OP_LOG:  stack[sp].v = stack[sp].v > 0 ? (int32_t)logf((float)stack[sp].v) : 0; break;
-            case OP_EXP:  stack[sp].v = (int32_t)expf((float)stack[sp].v); break;
-            case OP_COND: { 
-                Val f = stack[sp--]; Val tv = stack[sp--]; Val c = stack[sp--]; 
-                Val target = c.v ? tv : f;
-                if (target.type == 1) { if (csp < 255) { call_stack[++csp] = pc; pc = target.v - 1; } } 
-                else { stack[++sp] = target; }
-                break; 
-            }
-            case OP_ADD: stack[sp-1].v += stack[sp].v; sp--; break;
-            case OP_SUB: stack[sp-1].v -= stack[sp].v; sp--; break;
-            case OP_MUL: stack[sp-1].v *= stack[sp].v; sp--; break;
-            case OP_DIV: stack[sp-1].v = stack[sp].v ? stack[sp-1].v / stack[sp].v : 0; sp--; break;
-            case OP_MOD: stack[sp-1].v = stack[sp].v ? stack[sp-1].v % stack[sp].v : 0; sp--; break;
-            case OP_AND: stack[sp-1].v &= stack[sp].v; sp--; break;
-            case OP_OR:  stack[sp-1].v |= stack[sp].v; sp--; break;
-            case OP_XOR: stack[sp-1].v ^= stack[sp].v; sp--; break;
-            case OP_SHL: stack[sp-1].v <<= stack[sp].v; sp--; break;
-            case OP_SHR: stack[sp-1].v >>= stack[sp].v; sp--; break;
-            case OP_LT:  stack[sp-1].v = (stack[sp-1].v < stack[sp].v); sp--; break;
-            case OP_GT:  stack[sp-1].v = (stack[sp-1].v > stack[sp].v); sp--; break;
-            case OP_EQ:  stack[sp-1].v = (stack[sp-1].v == stack[sp].v); sp--; break;
-            case OP_NEQ: stack[sp-1].v = (stack[sp-1].v != stack[sp].v); sp--; break;
-            case OP_LTE: stack[sp-1].v = (stack[sp-1].v <= stack[sp].v); sp--; break;
-            case OP_GTE: stack[sp-1].v = (stack[sp-1].v >= stack[sp].v); sp--; break;
-            case OP_MIN: stack[sp-1].v = std::min(stack[sp-1].v, stack[sp].v); sp--; break;
-            case OP_MAX: stack[sp-1].v = std::max(stack[sp-1].v, stack[sp].v); sp--; break;
-            case OP_POW: stack[sp-1].v = (int32_t)powf((float)stack[sp-1].v, (float)stack[sp].v); sp--; break;
-            default: break;
+    static const void* dispatch_table[] = {
+        &&L_OP_VAL, &&L_OP_T, &&L_OP_LOAD, &&L_OP_STORE, &&L_OP_STORE_KEEP, &&L_OP_POP,
+        &&L_OP_ADD, &&L_OP_SUB, &&L_OP_MUL, &&L_OP_DIV, &&L_OP_MOD, 
+        &&L_OP_AND, &&L_OP_OR,  &&L_OP_XOR, &&L_OP_SHL, &&L_OP_SHR, 
+        &&L_OP_LT,  &&L_OP_GT,  &&L_OP_EQ,  &&L_OP_NEQ, &&L_OP_LTE, &&L_OP_GTE,
+        &&L_OP_COND, &&L_OP_NEG, &&L_OP_NOT, &&L_OP_BNOT,               
+        &&L_OP_SIN, &&L_OP_COS, &&L_OP_TAN, &&L_OP_SQRT, &&L_OP_LOG, &&L_OP_EXP,
+        &&L_OP_MIN, &&L_OP_MAX, &&L_OP_POW, 
+        &&L_OP_JMP, &&L_OP_PUSH_FUNC, &&L_OP_DYN_CALL, &&L_OP_DYN_CALL_IF_FUNC, &&L_OP_RET,
+        &&L_OP_BIND, &&L_OP_UNBIND, &&L_DEFAULT, 
+        &&L_OP_VEC, &&L_OP_AT, &&L_DEFAULT       
+    };
+
+    Instruction* prog = program_bank[bank];
+    int pc = 0;
+    Instruction inst = prog[pc];
+
+    goto *dispatch_table[inst.op];
+
+    #define BEEP() do { \
+        if (++pc >= len) goto L_END; \
+        inst = prog[pc]; \
+        goto *dispatch_table[inst.op]; \
+    } while(0)
+
+    L_OP_VAL: stack[++sp] = {0, inst.val}; BEEP();
+    L_OP_T:   stack[++sp] = {0, setF((float)t)}; BEEP();
+    L_OP_LOAD: stack[++sp] = vars[inst.val]; BEEP();
+    L_OP_STORE: if(sp>=0) vars[inst.val] = stack[sp--]; BEEP();
+    L_OP_STORE_KEEP: if(sp>=0) vars[inst.val] = stack[sp]; BEEP();
+    L_OP_POP: if(sp>=0) sp--; BEEP();
+    L_OP_JMP: pc = inst.val - 1; BEEP();
+    L_OP_PUSH_FUNC: stack[++sp] = {1, pc + 1}; pc = inst.val - 1; BEEP();
+    
+    L_OP_DYN_CALL:
+        if (stack[sp].type == 1) { 
+            if (csp < 255) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
+            else sp--; 
+        } else {
+            int args = inst.val;
+            if (sp >= args) sp -= (args + 1); else sp = -1;
+            stack[++sp] = {0, 0}; 
         }
+        BEEP();
+        
+    L_OP_DYN_CALL_IF_FUNC:
+        if (stack[sp].type == 1) { 
+            if (csp < 255) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
+            else sp--;
+        }
+        BEEP();
+        
+    L_OP_RET: if (csp >= 0) pc = call_stack[csp--]; else pc = len; BEEP();
+    
+    L_OP_BIND: 
+        if (sp >= 0) {
+            if (ssp < 255) shadow_val[++ssp] = vars[inst.val];
+            vars[inst.val] = stack[sp--];
+        }
+        BEEP();
+        
+    L_OP_UNBIND: 
+        if (ssp >= 0) vars[inst.val] = shadow_val[ssp--]; 
+        BEEP();
+    
+    L_OP_VEC: 
+        if (sp >= 0) stack[sp].type = 2; 
+        BEEP();
+        
+    L_OP_AT: {
+        if (sp < 1) return 128; 
+        int32_t idx = (int32_t)getF(stack[sp--].v);
+        int32_t size = (int32_t)getF(stack[sp--].v);
+        if (size <= 0 || sp < size - 1) return 128; 
+        idx = ((idx % size) + size) % size;
+        int32_t res = stack[sp - size + 1 + idx].v; 
+        sp -= size; 
+        stack[++sp] = {0, res}; 
+        BEEP();
     }
     
+    L_OP_NEG: stack[sp].v = setF(-getF(stack[sp].v)); BEEP();
+    L_OP_NOT: stack[sp].v = setF(getF(stack[sp].v) == 0.0f ? 1.0f : 0.0f); BEEP();
+    L_OP_BNOT: stack[sp].v = setF((float)(~(int32_t)getF(stack[sp].v))); BEEP();
+    L_OP_SIN: stack[sp].v = setF(128.0f + sinf(getF(stack[sp].v)/128.0f*M_PI)*127.0f); BEEP();
+    L_OP_COS: stack[sp].v = setF(128.0f + cosf(getF(stack[sp].v)/128.0f*M_PI)*127.0f); BEEP();
+    L_OP_TAN: stack[sp].v = setF(128.0f + tanf(getF(stack[sp].v)/128.0f*M_PI)*127.0f); BEEP();
+    L_OP_SQRT: stack[sp].v = setF(getF(stack[sp].v) >= 0.0f ? sqrtf(getF(stack[sp].v)) : 0.0f); BEEP();
+    L_OP_LOG:  stack[sp].v = setF(getF(stack[sp].v) > 0.0f ? logf(getF(stack[sp].v)) : 0.0f); BEEP();
+    L_OP_EXP:  stack[sp].v = setF(expf(getF(stack[sp].v))); BEEP();
+    
+    L_OP_COND: { 
+        Val f = stack[sp--]; Val tv = stack[sp--]; Val c = stack[sp--]; 
+        Val target = (getF(c.v) != 0.0f) ? tv : f;
+        if (target.type == 1) { if (csp < 255) { call_stack[++csp] = pc; pc = target.v - 1; } } 
+        else { stack[++sp] = target; }
+        BEEP(); 
+    }
+    
+    L_OP_ADD: stack[sp-1].v = setF(getF(stack[sp-1].v) + getF(stack[sp].v)); sp--; BEEP();
+    L_OP_SUB: stack[sp-1].v = setF(getF(stack[sp-1].v) - getF(stack[sp].v)); sp--; BEEP();
+    L_OP_MUL: stack[sp-1].v = setF(getF(stack[sp-1].v) * getF(stack[sp].v)); sp--; BEEP();
+    
+    L_OP_DIV: {
+        float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
+        if (d != 0.0f) {
+            if (n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
+            else stack[sp-1].v = setF(n / d);
+        } else stack[sp-1].v = setF(0.0f);
+        sp--; BEEP();
+    }
+    L_OP_MOD: {
+        float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
+        if (d != 0.0f) {
+            if (n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
+            else stack[sp-1].v = setF(fmodf(n, d));
+        } else stack[sp-1].v = setF(0.0f);
+        sp--; BEEP();
+    }
+    
+    L_OP_AND: stack[sp-1].v = setF((float)((int32_t)getF(stack[sp-1].v) & (int32_t)getF(stack[sp].v))); sp--; BEEP();
+    L_OP_OR:  stack[sp-1].v = setF((float)((int32_t)getF(stack[sp-1].v) | (int32_t)getF(stack[sp].v))); sp--; BEEP();
+    L_OP_XOR: stack[sp-1].v = setF((float)((int32_t)getF(stack[sp-1].v) ^ (int32_t)getF(stack[sp].v))); sp--; BEEP();
+    L_OP_SHL: stack[sp-1].v = setF((float)((int32_t)getF(stack[sp-1].v) << (int32_t)getF(stack[sp].v))); sp--; BEEP();
+    L_OP_SHR: stack[sp-1].v = setF((float)((int32_t)getF(stack[sp-1].v) >> (int32_t)getF(stack[sp].v))); sp--; BEEP();
+    
+    L_OP_LT:  stack[sp-1].v = setF(getF(stack[sp-1].v) < getF(stack[sp].v) ? 1.0f : 0.0f); sp--; BEEP();
+    L_OP_GT:  stack[sp-1].v = setF(getF(stack[sp-1].v) > getF(stack[sp].v) ? 1.0f : 0.0f); sp--; BEEP();
+    L_OP_EQ:  stack[sp-1].v = setF(getF(stack[sp-1].v) == getF(stack[sp].v) ? 1.0f : 0.0f); sp--; BEEP();
+    L_OP_NEQ: stack[sp-1].v = setF(getF(stack[sp-1].v) != getF(stack[sp].v) ? 1.0f : 0.0f); sp--; BEEP();
+    L_OP_LTE: stack[sp-1].v = setF(getF(stack[sp-1].v) <= getF(stack[sp].v) ? 1.0f : 0.0f); sp--; BEEP();
+    L_OP_GTE: stack[sp-1].v = setF(getF(stack[sp-1].v) >= getF(stack[sp].v) ? 1.0f : 0.0f); sp--; BEEP();
+    
+    L_OP_MIN: stack[sp-1].v = setF(std::min(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
+    L_OP_MAX: stack[sp-1].v = setF(std::max(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
+    L_OP_POW: stack[sp-1].v = setF(powf(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
+    
+    L_DEFAULT: 
+        BEEP();
+
+    L_END:
     if (sp >= 0) {
         if (stack[sp].type == 2) {
-            int32_t size = stack[sp].v;
+            int32_t size = (int32_t)getF(stack[sp].v);
             if (size > 0 && sp >= size) {
                 if (size >= 2) {
-                    int32_t L = stack[sp - size].v;
-                    int32_t R = stack[sp - size + 1].v;
+                    int32_t L = (int32_t)getF(stack[sp - size].v);
+                    int32_t R = (int32_t)getF(stack[sp - size + 1].v);
                     return (uint8_t)(((L & 255) + (R & 255)) / 2);
                 } else {
-                    return (uint8_t)(stack[sp - size].v & 255);
+                    return (uint8_t)((int32_t)getF(stack[sp - size].v) & 255);
                 }
             }
         }
-        return (uint8_t)(stack[sp].v & 255);
+        return (uint8_t)((int32_t)getF(stack[sp].v) & 255);
     }
     return 128;
 }

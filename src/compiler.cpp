@@ -3,7 +3,6 @@
 bool compileRPN(String input) {
     var_count = 0; 
     memset(vars, 0, sizeof(vars)); 
-    memset(vsp, 0, sizeof(vsp));
     
     uint8_t target = 1 - active_bank;
     memset(program_bank[target], 0, sizeof(Instruction) * 256);
@@ -110,16 +109,18 @@ bool compileRPN(String input) {
         else if (s.startsWith("'") && s.endsWith("'")) {
             int count = 0;
             for (size_t k = 1; k < s.length() - 1; k++) {
-                int32_t val = (s[k] >= '0' && s[k] <= '9') ? (s[k] - '0') : s[k];
-                program_bank[target][len++] = {OP_VAL, val};
+                float val = (s[k] >= '0' && s[k] <= '9') ? (float)(s[k] - '0') : (float)s[k];
+                program_bank[target][len++] = {OP_VAL, setF(val)};
                 count++;
             }
-            program_bank[target][len++] = {OP_VAL, count};
+            program_bank[target][len++] = {OP_VAL, setF((float)count)};
             program_bank[target][len++] = {OP_VEC, 0};
         }
         else if (parsing_params) { current_params.push_back(getVarId(s)); }
         else {
-            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1]))) program_bank[target][len++] = {OP_VAL, (int32_t)s.toInt()};
+            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1]))) {
+                program_bank[target][len++] = {OP_VAL, setF(strtof(s.c_str(), NULL))};
+            }
             else if (s == "t") program_bank[target][len++] = {OP_T, 0};
             else if (s == "?") program_bank[target][len++] = {OP_COND, 0};
             else {
@@ -188,7 +189,7 @@ static bool isFuncDef(const char* p, std::vector<String>& params) {
 }
 
 bool compileInfix(String input, bool reset_t) {
-    var_count = 0; memset(vars, 0, sizeof(vars)); memset(vsp, 0, sizeof(vsp));
+    var_count = 0; memset(vars, 0, sizeof(vars)); 
     uint8_t target = 1 - active_bank; memset(program_bank[target], 0, sizeof(Instruction) * 256);
     int len = 0; OpCode os[32]; int os_id[32]; int ot = -1; const char* p = input.c_str();
     int paren_depth = 0; int cond_depth = 0;
@@ -204,10 +205,10 @@ bool compileInfix(String input, bool reset_t) {
         if (len >= 256 || ot >= 31) return false; 
         if (isspace(*p)) { p++; continue; }
         
-        if (isdigit(*p)) { 
+        if (isdigit(*p) || (*p == '.' && isdigit(*(p+1)))) { 
             if (expect_op) return false; 
             expect_op = true;
-            program_bank[target][len++] = {OP_VAL, (int32_t)strtol(p, (char**)&p, 10)}; 
+            program_bank[target][len++] = {OP_VAL, setF(strtof(p, (char**)&p))}; 
         }
         else if (isalpha(*p)) { 
             String word = ""; while (isalpha(*p) || isdigit(*p) || *p == '_') word += *p++; 
@@ -254,12 +255,12 @@ bool compileInfix(String input, bool reset_t) {
             if (expect_op) return false;
             p++; int count = 0;
             while (*p && *p != '\'') {
-                int32_t val = (*p >= '0' && *p <= '9') ? (*p - '0') : *p;
-                program_bank[target][len++] = {OP_VAL, val};
+                float val = (*p >= '0' && *p <= '9') ? (float)(*p - '0') : (float)*p;
+                program_bank[target][len++] = {OP_VAL, setF(val)};
                 count++; p++;
             }
             if (*p == '\'') p++;
-            program_bank[target][len++] = {OP_VAL, count};
+            program_bank[target][len++] = {OP_VAL, setF((float)count)};
             program_bank[target][len++] = {OP_VEC, 0};
             expect_op = true;
         }
@@ -279,7 +280,7 @@ bool compileInfix(String input, bool reset_t) {
                 expect_op = false; 
             } else {
                 os[++ot] = OP_NONE; paren_depth++; bracket_types.push_back(0); 
-                // HIGH IMPACT FIX: Empty parenthesis check
+                
                 const char* temp = p + 1;
                 while (isspace(*temp)) temp++;
                 if (*temp == ')') call_arg_counts.push_back(0);
@@ -322,7 +323,7 @@ bool compileInfix(String input, bool reset_t) {
             int btype = bracket_types.back(); bracket_types.pop_back();
             if (btype == 1) { 
                 int size = array_counts.back(); array_counts.pop_back(); 
-                program_bank[target][len++] = {OP_VAL, size};
+                program_bank[target][len++] = {OP_VAL, setF((float)size)};
                 program_bank[target][len++] = {OP_VEC, 0};
             } else { 
                 program_bank[target][len++] = {OP_AT, 0}; 

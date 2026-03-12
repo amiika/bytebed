@@ -6,6 +6,7 @@
 #include <cctype>
 #include <vector>
 #include <map>
+#include <cstdio>
 
 // Minimal mock for Arduino String to make compiler.cpp compile in standard C++
 class String {
@@ -17,6 +18,18 @@ public:
     String(char c) : str(1, c) {}
     String(int val) : str(std::to_string(val)) {}
     String(const std::string& s) : str(s) {}
+
+    String(float val, int decimalPlaces = 2) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "%.*f", decimalPlaces, val);
+        
+        // Strip trailing zeros for clean Bytebeat output
+        char* p = buf + strlen(buf) - 1;
+        while (*p == '0' && p > buf) *p-- = '\0';
+        if (*p == '.') *p = '\0'; // Remove trailing dot if it was a whole number
+        
+        str = buf;
+    }
 
     const char* c_str() const { return str.c_str(); }
     int length() const { return str.length(); }
@@ -48,7 +61,7 @@ public:
     String operator+(const char* other) const { return String(str + other); }
     String operator+(char c) const { return String(str + c); }
     
-    // The missing += operators that caused the crash!
+    // The += operators
     String& operator+=(const String& other) { str += other.str; return *this; }
     String& operator+=(const char* other) { str += other; return *this; }
     String& operator+=(char c) { str += c; return *this; }

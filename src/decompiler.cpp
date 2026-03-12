@@ -50,7 +50,11 @@ String decompile(bool to_rpn) {
         std::vector<String> toks;
         for (int i = 0; i < len; i++) {
             OpCode op = program_bank[bank][i].op;
-            if (op == OP_VAL) toks.push_back(String(program_bank[bank][i].val));
+            if (op == OP_VAL) {
+                float f = getF(program_bank[bank][i].val);
+                if (f == (int32_t)f) toks.push_back(String((int32_t)f));
+                else toks.push_back(String(f, 4));
+            }
             else if (op == OP_T) toks.push_back("t"); 
             else if (op == OP_LOAD) {
                 int id = program_bank[bank][i].val;
@@ -92,12 +96,16 @@ String decompile(bool to_rpn) {
         OpCode op = program_bank[bank][i].op; 
         int cur_p = getPrecedence(op);
         
-        if (op == OP_VAL) st.push_back({String(program_bank[bank][i].val), 10, false, false});
+        if (op == OP_VAL) {
+            float f = getF(program_bank[bank][i].val);
+            String sVal = (f == (int32_t)f) ? String((int32_t)f) : String(f, 4);
+            st.push_back({sVal, 10, false, false});
+        }
         else if (op == OP_T) st.push_back({"t", 10, false, false});
         else if (op == OP_LOAD) st.push_back({getVarName(program_bank[bank][i].val), 10, false, false});
         else if (op == OP_VEC) {
             if (st.empty()) continue;
-            int size = st.back().s.toInt(); st.pop_back();
+            int size = strtol(st.back().s.c_str(), NULL, 10); st.pop_back();
             String arr = "[";
             std::vector<Node> elems;
             for (int a = 0; a < size; a++) {
