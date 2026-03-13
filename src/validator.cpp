@@ -87,20 +87,40 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_NEG: if(sp<0) return false; v_stack[sp].v = setF(-getF(v_stack[sp].v)); break;
             case OP_NOT: if(sp<0) return false; v_stack[sp].v = setF(getF(v_stack[sp].v) == 0.0f ? 1.0f : 0.0f); break;
             case OP_BNOT: if(sp<0) return false; v_stack[sp].v = setF((float)(~(int32_t)getF(v_stack[sp].v))); break; 
-            case OP_SIN: if(sp<0) return false; v_stack[sp].v = setF(128.0f + sinf(getF(v_stack[sp].v)/128.0f*M_PI)*127.0f); break;
-            case OP_COS: if(sp<0) return false; v_stack[sp].v = setF(128.0f + cosf(getF(v_stack[sp].v)/128.0f*M_PI)*127.0f); break;
-            case OP_TAN: if(sp<0) return false; v_stack[sp].v = setF(128.0f + tanf(getF(v_stack[sp].v)/128.0f*M_PI)*127.0f); break;
+            
+            case OP_SIN: {
+                if(sp<0) return false;
+                float val = getF(v_stack[sp].v);
+                v_stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + sinf(val/128.0f*M_PI)*127.0f : sinf(val));
+                break;
+            }
+            case OP_COS: {
+                if(sp<0) return false;
+                float val = getF(v_stack[sp].v);
+                v_stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + cosf(val/128.0f*M_PI)*127.0f : cosf(val));
+                break;
+            }
+            case OP_TAN: {
+                if(sp<0) return false;
+                float val = getF(v_stack[sp].v);
+                v_stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + tanf(val/128.0f*M_PI)*127.0f : tanf(val));
+                break;
+            }
+            
             case OP_ADD: if(sp<1) return false; v_stack[sp-1].v = setF(getF(v_stack[sp-1].v) + getF(v_stack[sp].v)); sp--; break;
             case OP_SUB: if(sp<1) return false; v_stack[sp-1].v = setF(getF(v_stack[sp-1].v) - getF(v_stack[sp].v)); sp--; break;
             case OP_MUL: if(sp<1) return false; v_stack[sp-1].v = setF(getF(v_stack[sp-1].v) * getF(v_stack[sp].v)); sp--; break;
             
+            // --- NEW: JS Floating Point Math Parity ---
             case OP_DIV: {
                 if(sp<1) return false;
                 float n = getF(v_stack[sp-1].v);
                 float d = getF(v_stack[sp].v);
                 if (d != 0.0f) {
-                    if (n == (int32_t)n && d == (int32_t)d) v_stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
-                    else v_stack[sp-1].v = setF(n / d);
+                    if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) 
+                        v_stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
+                    else 
+                        v_stack[sp-1].v = setF(n / d);
                 } else v_stack[sp-1].v = setF(0.0f);
                 sp--; break;
             }
@@ -109,8 +129,10 @@ bool validateProgram(uint8_t bank, int len) {
                 float n = getF(v_stack[sp-1].v);
                 float d = getF(v_stack[sp].v);
                 if (d != 0.0f) {
-                    if (n == (int32_t)n && d == (int32_t)d) v_stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
-                    else v_stack[sp-1].v = setF(fmodf(n, d));
+                    if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) 
+                        v_stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
+                    else 
+                        v_stack[sp-1].v = setF(fmodf(n, d));
                 } else v_stack[sp-1].v = setF(0.0f);
                 sp--; break;
             }

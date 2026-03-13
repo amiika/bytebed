@@ -33,6 +33,15 @@ emcc ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cp
 
 xxd -i bytebed.wasm > ../include/wasm_binary.h
 
+## TESTS
+
+Testing native and cardputer using platformio: 
+
+pio test -e native
+
+pio test -e cardputer
+
+
 # Contributions
 
 Sure, why not.

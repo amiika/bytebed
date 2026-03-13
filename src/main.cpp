@@ -24,7 +24,8 @@ void playBytebeat(void *pvParameters) {
                 t_raw++;
                 local_mono_buf[i] = (int16_t)((sample - 128) << 8); 
             }
-            M5.Speaker.playRaw(local_mono_buf, AUDIO_BUF_SIZE, SAMPLE_RATE_MATH, false, 1, 0); 
+            // Dynamically applies the selected sample rate per buffer
+            M5.Speaker.playRaw(local_mono_buf, AUDIO_BUF_SIZE, current_sample_rate, false, 1, 0); 
         } else {
             vTaskDelay(10);
         }
@@ -99,7 +100,7 @@ void loop() {
     if (st.opt) strncpy(current_top_text, "LOAD: 0-9", 63);
     else if (st.alt) strncpy(current_top_text, "SAVE: 0-9", 63);
     else if (st.ctrl) strncpy(current_top_text, "CTRL: Z / Y", 63);
-    else if (st.fn) strncpy(current_top_text, "FN: 0-4 / Arrows / W / T / +-", 63);
+    else if (st.fn) strncpy(current_top_text, "FN: 1-4/W/T/S/F/Arr/+-", 63);
     else strncpy(current_top_text, "BYTEBED", 63);
     current_top_text[63] = '\0'; 
 
@@ -160,10 +161,30 @@ void loop() {
                     ESP.restart();
                 }
             }
+            // Theme Toggle
             if (M5Cardputer.Keyboard.isKeyPressed('T') || M5Cardputer.Keyboard.isKeyPressed('t')) { 
                 current_theme_idx = (current_theme_idx + 1) % 3; 
                 bg_sprite.fillScreen(theme.bg); 
             }
+            // Sample Rate Toggle
+            if (M5Cardputer.Keyboard.isKeyPressed('S') || M5Cardputer.Keyboard.isKeyPressed('s')) { 
+                if (current_sample_rate == 8000) current_sample_rate = 11025;
+                else if (current_sample_rate == 11025) current_sample_rate = 22050;
+                else if (current_sample_rate == 22050) current_sample_rate = 32000;
+                else if (current_sample_rate == 32000) current_sample_rate = 44100;
+                else if (current_sample_rate == 44100) current_sample_rate = 48000;
+                else current_sample_rate = 8000;
+                
+                status_msg = "RATE: " + String(current_sample_rate) + "Hz";
+                status_timer = millis() + 1500;
+            }
+            // Bytebeat/Floatbeat Toggle
+            if (M5Cardputer.Keyboard.isKeyPressed('F') || M5Cardputer.Keyboard.isKeyPressed('f')) {
+                current_play_mode = (current_play_mode == MODE_BYTEBEAT) ? MODE_FLOATBEAT : MODE_BYTEBEAT;
+                status_msg = (current_play_mode == MODE_BYTEBEAT) ? "MODE: BYTEBEAT" : "MODE: FLOATBEAT";
+                status_timer = millis() + 1500;
+            }
+
             if (M5Cardputer.Keyboard.isKeyPressed('1')) { current_vis = VIS_WAV_WIRE; bg_sprite.fillScreen(theme.bg); }
             if (M5Cardputer.Keyboard.isKeyPressed('2')) { current_vis = VIS_DIA_AMP;  bg_sprite.fillScreen(theme.bg); }
             if (M5Cardputer.Keyboard.isKeyPressed('3')) { current_vis = VIS_DIA_BIT;  bg_sprite.fillScreen(theme.bg); }

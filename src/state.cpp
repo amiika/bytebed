@@ -24,6 +24,9 @@ uint8_t wave_buf[240] = {0};
 uint8_t last_sample_val = 128;
 uint32_t last_draw = 0;
 
+PlayMode current_play_mode = MODE_BYTEBEAT;
+int current_sample_rate = DEFAULT_SAMPLE_RATE;
+
 const char* classicPresets[10] = {
     "t*((t>>12|t>>8)&63&t>>4)",
     "(t*5&t>>7)|(t*3&t>>10)",

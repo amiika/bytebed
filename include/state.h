@@ -1,26 +1,33 @@
 #pragma once
 
-#ifndef __EMSCRIPTEN__
+// --- Bulletproof Native & Web Gate (Includes) ---
+#if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
 #include <M5Cardputer.h>
 #include <M5Unified.h>
 #include <Preferences.h>
 #include <esp_http_server.h>
 #include <DNSServer.h>
 #else
+// --- Web & Mac Native Fallback ---
 #include "Arduino.h" 
 #endif
 
 #include <vector>
 #include <map>
 
-#define SAMPLE_RATE_MATH   8000   
-#define AUDIO_BUF_SIZE     512    
-#define VOL_STEP           0.05f  
-#define UI_REFRESH_MS      33
-#define UNDO_DEPTH         20
+#define DEFAULT_SAMPLE_RATE 8000   
+#define AUDIO_BUF_SIZE      512    
+#define VOL_STEP            0.05f  
+#define UI_REFRESH_MS       33
+#define UNDO_DEPTH          20
 
 enum VisMode { 
     VIS_WAV_WIRE, VIS_DIA_AMP, VIS_DIA_BIT, VIS_WAV_ORIG, VIS_HISTORY 
+};
+
+enum PlayMode { 
+    MODE_BYTEBEAT, 
+    MODE_FLOATBEAT 
 };
 
 enum OpCode : uint8_t { 
@@ -47,7 +54,8 @@ extern int current_theme_idx;
 
 struct Layout { int input_y; int vis_y; int vis_h; };
 
-#ifndef __EMSCRIPTEN__
+// --- Bulletproof Native & Web Gate (Variables) ---
+#if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
 extern httpd_handle_t stream_server;
 extern DNSServer dnsServer;
 extern const byte DNS_PORT;
@@ -65,6 +73,9 @@ extern int32_t t_raw;
 extern uint8_t wave_buf[240];
 extern uint8_t last_sample_val;
 extern uint32_t last_draw;
+
+extern PlayMode current_play_mode;
+extern int current_sample_rate;
 
 extern const char* classicPresets[10];
 extern const char* testPresets[10];

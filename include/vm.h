@@ -2,7 +2,8 @@
 #include "state.h"
 
 static inline float getF(int32_t v) { union { int32_t i; float f; } u; u.i = v; return u.f; }
-static inline int32_t setF(float f) { union { int32_t i; float f; } u; u.f = f; return u.i; }
+template <typename T>
+static inline int32_t setF(T f) { union { int32_t i; float f; } u; u.f = static_cast<float>(f); return u.i; }
 
 struct Instruction {
     OpCode op;

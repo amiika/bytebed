@@ -17,7 +17,7 @@
         
         .btn { 
             cursor: pointer; user-select: none; transition: all 0.15s ease; white-space: nowrap;
-            color: #00ff00; border: 1px solid #004400; 
+            color: #00ff00; border: 1px solid #004400;
             padding: 4px 12px; background: transparent; text-decoration: none;
             text-transform: uppercase;
             text-align: center;
@@ -39,6 +39,8 @@
         <div class="meta" id="status">BYTEBED</div>
         
         <div class="controls">
+            <span id="rate-btn" class="btn" onclick="cycleRate(event)">8000HZ</span>
+            <span id="format-btn" class="btn active" onclick="toggleFormat(event)">BYTEBEAT</span>
             <span id="play-btn" class="btn" onclick="togglePlay(event)">START</span>
             <span id="mode-btn" class="btn active" onclick="toggleMode(event)">INFIX</span>
             <span id="btn-auto" class="btn active" onclick="toggleAuto(event)">AUTO</span>

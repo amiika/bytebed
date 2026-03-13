@@ -1,8 +1,21 @@
 #include "vm.h"
+#include <math.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
 
 bool compileRPN(String input) {
     var_count = 0; 
     memset(vars, 0, sizeof(vars)); 
+    
+    vars[getVarId("PI")] = {0, setF(M_PI)};
+    vars[getVarId("pi")] = {0, setF(M_PI)};
+    vars[getVarId("E")]  = {0, setF(M_E)};
+    vars[getVarId("e")]  = {0, setF(M_E)};
     
     uint8_t target = 1 - active_bank;
     memset(program_bank[target], 0, sizeof(Instruction) * 256);
@@ -109,11 +122,11 @@ bool compileRPN(String input) {
         else if (s.startsWith("'") && s.endsWith("'")) {
             int count = 0;
             for (size_t k = 1; k < s.length() - 1; k++) {
-                float val = (s[k] >= '0' && s[k] <= '9') ? (float)(s[k] - '0') : (float)s[k];
+                float val = (s[k] >= '0' && s[k] <= '9') ? (s[k] - '0') : s[k];
                 program_bank[target][len++] = {OP_VAL, setF(val)};
                 count++;
             }
-            program_bank[target][len++] = {OP_VAL, setF((float)count)};
+            program_bank[target][len++] = {OP_VAL, setF(count)};
             program_bank[target][len++] = {OP_VEC, 0};
         }
         else if (parsing_params) { current_params.push_back(getVarId(s)); }
@@ -190,6 +203,12 @@ static bool isFuncDef(const char* p, std::vector<String>& params) {
 
 bool compileInfix(String input, bool reset_t) {
     var_count = 0; memset(vars, 0, sizeof(vars)); 
+    
+    vars[getVarId("PI")] = {0, setF(M_PI)};
+    vars[getVarId("pi")] = {0, setF(M_PI)};
+    vars[getVarId("E")]  = {0, setF(M_E)};
+    vars[getVarId("e")]  = {0, setF(M_E)};
+    
     uint8_t target = 1 - active_bank; memset(program_bank[target], 0, sizeof(Instruction) * 256);
     int len = 0; OpCode os[32]; int os_id[32]; int ot = -1; const char* p = input.c_str();
     int paren_depth = 0; int cond_depth = 0;
@@ -255,12 +274,12 @@ bool compileInfix(String input, bool reset_t) {
             if (expect_op) return false;
             p++; int count = 0;
             while (*p && *p != '\'') {
-                float val = (*p >= '0' && *p <= '9') ? (float)(*p - '0') : (float)*p;
+                float val = (*p >= '0' && *p <= '9') ? (*p - '0') : *p;
                 program_bank[target][len++] = {OP_VAL, setF(val)};
                 count++; p++;
             }
             if (*p == '\'') p++;
-            program_bank[target][len++] = {OP_VAL, setF((float)count)};
+            program_bank[target][len++] = {OP_VAL, setF(count)};
             program_bank[target][len++] = {OP_VEC, 0};
             expect_op = true;
         }
@@ -323,7 +342,7 @@ bool compileInfix(String input, bool reset_t) {
             int btype = bracket_types.back(); bracket_types.pop_back();
             if (btype == 1) { 
                 int size = array_counts.back(); array_counts.pop_back(); 
-                program_bank[target][len++] = {OP_VAL, setF((float)size)};
+                program_bank[target][len++] = {OP_VAL, setF(size)};
                 program_bank[target][len++] = {OP_VEC, 0};
             } else { 
                 program_bank[target][len++] = {OP_AT, 0}; 
@@ -382,7 +401,12 @@ bool compileInfix(String input, bool reset_t) {
                 bool is_unary = (cur == OP_NOT || cur == OP_NEG || cur == OP_BNOT);
                 if (!expect_op && !is_unary) return false; 
                 expect_op = false;
-                flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, getPrecedence(cur), true); 
+                
+                // --- NEW: JS Right-Associative Math Parity ---
+                int prec = getPrecedence(cur);
+                if (cur == OP_POW) prec++; 
+                
+                flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, prec, true); 
                 os[++ot] = cur; os_id[ot] = 0; p += opStr.length(); 
             } 
             else return false; 
@@ -393,4 +417,4 @@ bool compileInfix(String input, bool reset_t) {
     if (!validateProgram(target, len)) return false;
     if (reset_t) t_raw = 0; prog_len_bank[target] = len; active_bank = target; 
     return true;
-}
+}   

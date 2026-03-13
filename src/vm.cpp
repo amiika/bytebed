@@ -6,14 +6,10 @@ Instruction program_bank[2][256];
 int prog_len_bank[2] = {0, 0};
 volatile uint8_t active_bank = 0;
 
-// Shadow Stack Optimization Intact! 14KB Saved!
 Val vars[64];
-
-// Safely replaces std::map for variable names
 String symNames[64];
 int var_count = 0;
 
-// Baked directly into binary .rodata, no constructors needed!
 const MathFunc mathLibrary[] = {
     {"sin",  OP_SIN,  true},  {"cos",  OP_COS,  true},  {"tan",  OP_TAN,  true},
     {"sqrt", OP_SQRT, true},  {"log",  OP_LOG,  true},  {"exp",  OP_EXP,  true},
@@ -112,7 +108,7 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     } while(0)
 
     L_OP_VAL: stack[++sp] = {0, inst.val}; BEEP();
-    L_OP_T:   stack[++sp] = {0, setF((float)t)}; BEEP();
+    L_OP_T:   stack[++sp] = {0, setF(t)}; BEEP();
     L_OP_LOAD: stack[++sp] = vars[inst.val]; BEEP();
     L_OP_STORE: if(sp>=0) vars[inst.val] = stack[sp--]; BEEP();
     L_OP_STORE_KEEP: if(sp>=0) vars[inst.val] = stack[sp]; BEEP();
@@ -170,9 +166,23 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_NEG: stack[sp].v = setF(-getF(stack[sp].v)); BEEP();
     L_OP_NOT: stack[sp].v = setF(getF(stack[sp].v) == 0.0f ? 1.0f : 0.0f); BEEP();
     L_OP_BNOT: stack[sp].v = setF((float)(~(int32_t)getF(stack[sp].v))); BEEP();
-    L_OP_SIN: stack[sp].v = setF(128.0f + sinf(getF(stack[sp].v)/128.0f*M_PI)*127.0f); BEEP();
-    L_OP_COS: stack[sp].v = setF(128.0f + cosf(getF(stack[sp].v)/128.0f*M_PI)*127.0f); BEEP();
-    L_OP_TAN: stack[sp].v = setF(128.0f + tanf(getF(stack[sp].v)/128.0f*M_PI)*127.0f); BEEP();
+    
+    L_OP_SIN: {
+        float val = getF(stack[sp].v);
+        stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + sinf(val/128.0f*M_PI)*127.0f : sinf(val));
+        BEEP();
+    }
+    L_OP_COS: {
+        float val = getF(stack[sp].v);
+        stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + cosf(val/128.0f*M_PI)*127.0f : cosf(val));
+        BEEP();
+    }
+    L_OP_TAN: {
+        float val = getF(stack[sp].v);
+        stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + tanf(val/128.0f*M_PI)*127.0f : tanf(val));
+        BEEP();
+    }
+    
     L_OP_SQRT: stack[sp].v = setF(getF(stack[sp].v) >= 0.0f ? sqrtf(getF(stack[sp].v)) : 0.0f); BEEP();
     L_OP_LOG:  stack[sp].v = setF(getF(stack[sp].v) > 0.0f ? logf(getF(stack[sp].v)) : 0.0f); BEEP();
     L_OP_EXP:  stack[sp].v = setF(expf(getF(stack[sp].v))); BEEP();
@@ -189,19 +199,24 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_SUB: stack[sp-1].v = setF(getF(stack[sp-1].v) - getF(stack[sp].v)); sp--; BEEP();
     L_OP_MUL: stack[sp-1].v = setF(getF(stack[sp-1].v) * getF(stack[sp].v)); sp--; BEEP();
     
+    // --- NEW: JS Floating Point Math Parity ---
     L_OP_DIV: {
         float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
         if (d != 0.0f) {
-            if (n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
-            else stack[sp-1].v = setF(n / d);
+            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) 
+                stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
+            else 
+                stack[sp-1].v = setF(n / d);
         } else stack[sp-1].v = setF(0.0f);
         sp--; BEEP();
     }
     L_OP_MOD: {
         float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
         if (d != 0.0f) {
-            if (n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
-            else stack[sp-1].v = setF(fmodf(n, d));
+            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) 
+                stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
+            else 
+                stack[sp-1].v = setF(fmodf(n, d));
         } else stack[sp-1].v = setF(0.0f);
         sp--; BEEP();
     }
@@ -228,19 +243,35 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
 
     L_END:
     if (sp >= 0) {
+        float out_val = 0.0f;
+        bool is_bytebeat = (current_play_mode == MODE_BYTEBEAT);
+        
         if (stack[sp].type == 2) {
             int32_t size = (int32_t)getF(stack[sp].v);
             if (size > 0 && sp >= size) {
                 if (size >= 2) {
-                    int32_t L = (int32_t)getF(stack[sp - size].v);
-                    int32_t R = (int32_t)getF(stack[sp - size + 1].v);
-                    return (uint8_t)(((L & 255) + (R & 255)) / 2);
+                    float L = getF(stack[sp - size].v);
+                    float R = getF(stack[sp - size + 1].v);
+                    if (is_bytebeat) {
+                        return (uint8_t)((((int32_t)L & 255) + ((int32_t)R & 255)) / 2);
+                    } else {
+                        out_val = (L + R) / 2.0f;
+                    }
                 } else {
-                    return (uint8_t)((int32_t)getF(stack[sp - size].v) & 255);
+                    out_val = getF(stack[sp - size].v);
                 }
             }
+        } else {
+            out_val = getF(stack[sp].v);
         }
-        return (uint8_t)((int32_t)getF(stack[sp].v) & 255);
+
+        if (!is_bytebeat) {
+            if (out_val < -1.0f) out_val = -1.0f;
+            if (out_val > 1.0f) out_val = 1.0f;
+            return (uint8_t)((out_val + 1.0f) * 127.5f);
+        } else {
+            return (uint8_t)((int32_t)out_val & 255);
+        }
     }
     return 128;
 }

@@ -5,6 +5,11 @@
 #include "state.h" 
 #include "vm.h"
 
+// --- Include stdio for Native & Web ---
+#if defined(NATIVE_BUILD) || defined(__EMSCRIPTEN__)
+#include <stdio.h>
+#endif
+
 struct TestCase {
     const char* expr;
     int32_t t;
@@ -118,6 +123,8 @@ String runBytebeatTestSuite() {
     return ""; 
 }
 
+// --- HARDWARE SPECIFIC (ESP32) ---
+#if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
 void runTests(LGFX_Sprite &canvas) {
     String testError = runBytebeatTestSuite();
 
@@ -142,5 +149,4 @@ void runTests(LGFX_Sprite &canvas) {
         while (true) { delay(1000); } 
     }
 }
-
-#endif
+// --- TERMINAL SPECIFIC (
