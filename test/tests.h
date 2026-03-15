@@ -86,6 +86,14 @@ String runBytebeatTestSuite() {
         {"2.5e1 * 2",            0,  50, false, true},
         {"2.5e1 2 *",            0,  50, true,  true},
         {"1e-1 * 100",           0,  10, false, true},
+        
+        // --- NEW FEATURES: SHORT CIRCUIT LOGIC ---
+        {"0 && 5",               0,   0, false, true},
+        {"1 && 5",               0,   5, false, true},
+        {"1 || 5",               0,   1, false, true},
+        {"0 || 5",               0,   5, false, true},
+        {"a = 1; 0 && (a = 2); a", 0, 1, false, false}, // Explicitly ensures `a` is blocked from assignment
+        {"a = 1; 1 || (a = 2); a", 0, 1, false, false}, // Explicitly ensures `a` is blocked from assignment
 
         // --- LOGIC & ARRAYS ---
         {"f = (n) => n < 5 ? 100 : 200; f(2)",   2, 100, false, true}, 

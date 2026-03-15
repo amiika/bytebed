@@ -1,4 +1,5 @@
 #include "vm.h"
+#include <string.h>
 
 String decompileRPN() {
     String out = "";
@@ -7,6 +8,10 @@ String decompileRPN() {
     
     int func_ends[16];
     int fe_ptr = -1;
+
+    int sc_targets[16];
+    OpCode sc_ops[16];
+    int sc_ptr = -1;
     
     for (int pc = 0; pc < len; pc++) {
         Instruction inst = prog[pc];
@@ -14,6 +19,11 @@ String decompileRPN() {
         while (fe_ptr >= 0 && pc == func_ends[fe_ptr]) {
             out += "} ";
             fe_ptr--;
+        }
+        
+        while (sc_ptr >= 0 && pc == sc_targets[sc_ptr]) {
+            out += getOpSym(sc_ops[sc_ptr]) + " ";
+            sc_ptr--;
         }
 
         switch (inst.op) {
@@ -113,6 +123,17 @@ String decompileRPN() {
             case OP_AT:
                 out += "@ "; 
                 break;
+            case OP_SC_AND:
+            case OP_SC_OR:
+                if (inst.val != 0) {
+                    if (sc_ptr < 15) {
+                        sc_targets[++sc_ptr] = inst.val;
+                        sc_ops[sc_ptr] = inst.op;
+                    }
+                } else {
+                    out += getOpSym(inst.op) + " ";
+                }
+                break;
             case OP_NEG:
                 out += "-1 * ";
                 break;
@@ -129,6 +150,10 @@ String decompileRPN() {
     while (fe_ptr >= 0) {
         out += "} ";
         fe_ptr--;
+    }
+    while (sc_ptr >= 0) {
+        out += getOpSym(sc_ops[sc_ptr]) + " ";
+        sc_ptr--;
     }
 
     out.trim();
@@ -206,8 +231,6 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         }
         else if (inst.op == OP_DYN_CALL && sp >= inst.val) {
             int args = inst.val;
-            
-            // FOOLPROOF LOGIC: The function name is at the absolute top of the stack
             String func_name = stack[sp];
             
             String func_call = func_name + "(";
@@ -217,9 +240,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             }
             func_call += ")";
             
-            // Pop the function name and all evaluated arguments
             sp -= (args + 1);
-            
             if (sp < 63) { stack[++sp] = func_call; prec_stack[sp] = 10; }
         }
         else if (inst.op == OP_DYN_CALL_IF_FUNC) {
@@ -253,6 +274,40 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (f.startsWith("() => { ") && f.endsWith(" }")) f = f.substring(8, f.length() - 2);
             
             if (sp < 63) { stack[++sp] = c + " ? " + tv + " : " + f; prec_stack[sp] = 0; }
+        }
+        else if (inst.op == OP_SC_AND || inst.op == OP_SC_OR) {
+            if (inst.val != 0) {
+                String left = "0"; int lp = 10;
+                if (sp >= 0) { left = stack[sp]; lp = prec_stack[sp]; sp--; }
+                
+                int target_end = inst.val;
+                String right = decompileInfixRange(prog, pc + 1, target_end);
+                
+                int op_p = getPrecedence(inst.op);
+                String sym = (inst.op == OP_SC_AND) ? "&&" : "||";
+                
+                if (lp < op_p) left = "(" + left + ")";
+                
+                if (strstr(right.c_str(), sym.c_str()) != nullptr || strchr(right.c_str(), '?') != nullptr) {
+                    right = "(" + right + ")"; 
+                }
+                
+                if (sp < 63) { stack[++sp] = left + " " + sym + " " + right; prec_stack[sp] = op_p; }
+                
+                pc = target_end - 1;
+            } else {
+                if (sp >= 1) {
+                    String right = stack[sp]; int rp = prec_stack[sp]; sp--;
+                    String left = stack[sp]; int lp = prec_stack[sp]; sp--;
+                    
+                    int op_p = getPrecedence(inst.op);
+                    String sym = getOpSym(inst.op);
+                    
+                    if (lp < op_p) left = "(" + left + ")";
+                    if (rp <= op_p) right = "(" + right + ")";
+                    if (sp < 63) { stack[++sp] = left + " " + sym + " " + right; prec_stack[sp] = op_p; }
+                }
+            }
         }
         else if (inst.op >= OP_SIN && inst.op <= OP_EXP && sp >= 0) { 
              String val = stack[sp--]; 

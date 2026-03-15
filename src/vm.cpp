@@ -17,7 +17,6 @@ const MathFunc mathLibrary[] = {
 };
 const int mathLibrarySize = 9;
 
-// FIXED: Added all 11 compound operators directly to the native dictionary!
 const OpInfo opList[] = {
     {"+",  OP_ADD, 7}, {"-",  OP_SUB, 7}, {"*",  OP_MUL, 8},
     {"/",  OP_DIV, 8}, {"%",  OP_MOD, 8}, {"&",  OP_AND, 3},
@@ -25,7 +24,7 @@ const OpInfo opList[] = {
     {">",  OP_GT,  5}, {"!",  OP_NOT, 9}, {"~",  OP_BNOT, 9}, 
     {"==", OP_EQ,  4}, {"!=", OP_NEQ, 4}, {"<=", OP_LTE, 5}, 
     {">=", OP_GTE, 5}, {"<<", OP_SHL, 6}, {">>", OP_SHR, 6},
-    {"&&", OP_AND, 3}, {"||", OP_OR, 1},  {"**", OP_POW, 9}, 
+    {"&&", OP_SC_AND, 3}, {"||", OP_SC_OR, 1}, {"**", OP_POW, 9}, 
     {"_",  OP_VEC, 10}, {"@", OP_AT, 10},
     {"+=", OP_ADD_ASSIGN, -1}, {"-=", OP_SUB_ASSIGN, -1},
     {"*=", OP_MUL_ASSIGN, -1}, {"/=", OP_DIV_ASSIGN, -1},
@@ -55,7 +54,7 @@ int getPrecedence(OpCode op) {
         if (opList[i].code == op) return opList[i].precedence;
     }
     if (op == OP_COND) return 0;
-    if (op == OP_ASSIGN_VAR) return -1;
+    if (op == OP_ASSIGN_VAR || (op >= OP_ADD_ASSIGN && op <= OP_SHR_ASSIGN)) return -1;
     if (op == OP_STORE || op == OP_STORE_KEEP) return -2;
     if (op == OP_NONE || op == OP_DYN_CALL || op == OP_DYN_CALL_IF_FUNC) return -3;
     return 10; 
@@ -99,10 +98,9 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         &&L_OP_MIN, &&L_OP_MAX, &&L_OP_POW, 
         &&L_OP_JMP, &&L_OP_PUSH_FUNC, &&L_OP_DYN_CALL, &&L_OP_DYN_CALL_IF_FUNC, &&L_OP_RET,
         &&L_OP_BIND, &&L_OP_UNBIND, &&L_OP_ASSIGN_VAR, 
-        &&L_OP_VEC, &&L_OP_AT, 
+        &&L_OP_VEC, &&L_OP_AT, &&L_OP_SC_AND, &&L_OP_SC_OR, &&L_DEFAULT,
         &&L_OP_ADD_ASSIGN, &&L_OP_SUB_ASSIGN, &&L_OP_MUL_ASSIGN, &&L_OP_DIV_ASSIGN, &&L_OP_MOD_ASSIGN,
-        &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN,
-        &&L_DEFAULT       
+        &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN
     };
 
     Instruction* prog = program_bank[bank];
@@ -171,6 +169,38 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         int32_t res = stack[sp - size + 1 + idx].v; 
         sp -= size; 
         stack[++sp] = {0, res}; 
+        BEEP();
+    }
+    
+    // NEW: Dual-Mode Execution Logic for &&
+    L_OP_SC_AND: {
+        if (inst.val != 0) { // Infix Mode: Evaluate left and conditionally jump
+            if (sp >= 0) {
+                if (getF(stack[sp].v) == 0.0f) pc = inst.val - 1; 
+                else sp--; 
+            }
+        } else { // RPN Mode: Both sides are evaluated, logically pop
+            if (sp >= 1) {
+                if (getF(stack[sp-1].v) == 0.0f) sp--; 
+                else { stack[sp-1] = stack[sp]; sp--; }
+            }
+        }
+        BEEP();
+    }
+    
+    // NEW: Dual-Mode Execution Logic for ||
+    L_OP_SC_OR: {
+        if (inst.val != 0) { // Infix Mode
+            if (sp >= 0) {
+                if (getF(stack[sp].v) != 0.0f) pc = inst.val - 1; 
+                else sp--; 
+            }
+        } else { // RPN Mode
+            if (sp >= 1) {
+                if (getF(stack[sp-1].v) != 0.0f) sp--; 
+                else { stack[sp-1] = stack[sp]; sp--; }
+            }
+        }
         BEEP();
     }
     

@@ -57,7 +57,6 @@ bool compileRPN(String input) {
             tokens[tok_cnt++] = w;
         }
         else if (strchr("(){}=,;<>!+-*/%&|^~@_", *p)) {
-            // FIXED: 3-character lookahead added to the RPN lexer so <<=, >>=, and **= are kept intact
             if (*(p+1) && *(p+2) && strchr("=<>!&|*", *(p+1)) && *(p+2) == '=') {
                 String test3 = String(*p) + *(p+1) + *(p+2);
                 OpCode dummy;
@@ -215,7 +214,11 @@ bool compileRPN(String input) {
                 
                 OpCode opc;
                 if (!is_math) { 
-                    if (getOpCode(s, opc)) { program_bank[target][len++] = {opc, 0}; is_math = true; } 
+                    if (getOpCode(s, opc)) { 
+                        // FIXED: No fallbacks! Leaves the opcode completely native
+                        program_bank[target][len++] = {opc, 0}; 
+                        is_math = true; 
+                    } 
                 }
                 if (!is_math) {
                     int id = getVarId(s); program_bank[target][len++] = {OP_LOAD, id};
@@ -245,6 +248,10 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                     program_bank[target][cond_starts[cs_ptr--]].val = len;
                 }
                 program_bank[target][len++] = {OP_COND, 0}; ot--;
+            }
+            else if (os[ot] == OP_SC_AND || os[ot] == OP_SC_OR) {
+                program_bank[target][os_id[ot]].val = len;
+                ot--;
             }
             else if (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN) { program_bank[target][len++] = {os[ot], os_id[ot]}; ot--; }
             else { program_bank[target][len++] = {os[ot--], 0}; }
@@ -601,7 +608,15 @@ bool compileInfix(String input, bool reset_t) {
                 if (cur == OP_POW) prec++; 
                 
                 flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, prec, true); 
-                os[++ot] = cur; os_id[ot] = 0; p += opStr.length(); 
+                
+                if (cur == OP_SC_AND || cur == OP_SC_OR) {
+                    program_bank[target][len++] = {cur, 0};
+                    os[++ot] = cur; os_id[ot] = len - 1; 
+                } else {
+                    os[++ot] = cur; os_id[ot] = 0; 
+                }
+                
+                p += opStr.length(); 
             } 
             else return false; 
         }
