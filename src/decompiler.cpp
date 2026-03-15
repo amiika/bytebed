@@ -1,40 +1,31 @@
 #include "vm.h"
-#include <vector>
 
 String decompileRPN() {
     String out = "";
     Instruction* prog = program_bank[active_bank];
     int len = prog_len_bank[active_bank];
     
-    std::vector<int> func_ends;
+    int func_ends[16];
+    int fe_ptr = -1;
     
     for (int pc = 0; pc < len; pc++) {
         Instruction inst = prog[pc];
         
-        while (!func_ends.empty() && pc == func_ends.back()) {
+        while (fe_ptr >= 0 && pc == func_ends[fe_ptr]) {
             out += "} ";
-            func_ends.pop_back();
+            fe_ptr--;
         }
 
         switch (inst.op) {
             case OP_VAL: {
                 float v = getF(inst.val);
-                // Lookahead: Collapse OP_NEG into a unary prefix
-                if (pc + 1 < len && prog[pc+1].op == OP_NEG) {
-                    v = -v;
-                    pc++;
-                }
+                if (pc + 1 < len && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
                 out += String(v) + " "; 
                 break;
             }
             case OP_T: {
-                // Lookahead: Collapse OP_NEG into `-t`
-                if (pc + 1 < len && prog[pc+1].op == OP_NEG) {
-                    out += "-t "; 
-                    pc++;
-                } else {
-                    out += "t "; 
-                }
+                if (pc + 1 < len && prog[pc+1].op == OP_NEG) { out += "-t "; pc++; }
+                else { out += "t "; }
                 break;
             }
             case OP_LOAD: {
@@ -55,15 +46,14 @@ String decompileRPN() {
                 
                 if (is_call) {
                     out += prefix + getVarName(id) + " ";
-                    pc++; // skip DYN_CALL
-                    if (has_neg) pc++; // skip OP_NEG
+                    pc++; 
+                    if (has_neg) pc++;
                 } 
                 else {
-                    if (is_func) {
-                        out += "{" + getVarName(id) + "} "; 
-                    } else {
+                    if (is_func) out += "{" + getVarName(id) + "} ";
+                    else {
                         out += prefix + getVarName(id) + " ";
-                        if (has_neg) pc++; // skip OP_NEG
+                        if (has_neg) pc++;
                     }
                 }
                 break;
@@ -73,23 +63,33 @@ String decompileRPN() {
             case OP_ASSIGN_VAR:
                 out += getVarName(inst.val) + " = "; 
                 break;
+            case OP_ADD_ASSIGN: out += getVarName(inst.val) + " += "; break;
+            case OP_SUB_ASSIGN: out += getVarName(inst.val) + " -= "; break;
+            case OP_MUL_ASSIGN: out += getVarName(inst.val) + " *= "; break;
+            case OP_DIV_ASSIGN: out += getVarName(inst.val) + " /= "; break;
+            case OP_MOD_ASSIGN: out += getVarName(inst.val) + " %= "; break;
+            case OP_AND_ASSIGN: out += getVarName(inst.val) + " &= "; break;
+            case OP_OR_ASSIGN:  out += getVarName(inst.val) + " |= "; break;
+            case OP_XOR_ASSIGN: out += getVarName(inst.val) + " ^= "; break;
+            case OP_SHL_ASSIGN: out += getVarName(inst.val) + " <<= "; break;
+            case OP_SHR_ASSIGN: out += getVarName(inst.val) + " >>= "; break;
+            case OP_POW_ASSIGN: out += getVarName(inst.val) + " **= "; break;
             case OP_POP: 
-                // Silent in RPN
-                break; 
+                break;
             case OP_PUSH_FUNC: {
                 int end_pc = inst.val;
-                func_ends.push_back(end_pc);
+                if (fe_ptr < 15) func_ends[++fe_ptr] = end_pc;
                 
-                std::vector<String> params;
+                String params[8]; int param_cnt = 0;
                 int bind_pc = pc + 1;
                 while (bind_pc < end_pc && prog[bind_pc].op == OP_BIND) {
-                    params.push_back(getVarName(prog[bind_pc].val));
+                    if (param_cnt < 8) params[param_cnt++] = getVarName(prog[bind_pc].val);
                     bind_pc++;
                 }
                 
-                if (params.size() > 0) {
+                if (param_cnt > 0) {
                     out += "(";
-                    for (int i = params.size() - 1; i >= 0; i--) {
+                    for (int i = param_cnt - 1; i >= 0; i--) {
                         out += params[i];
                         if (i > 0) out += " ";
                     }
@@ -114,7 +114,6 @@ String decompileRPN() {
                 out += "@ "; 
                 break;
             case OP_NEG:
-                // FALLBACK: Complex expressions mathematically negate by multiplying by -1
                 out += "-1 * ";
                 break;
             case OP_NEQ:
@@ -127,9 +126,9 @@ String decompileRPN() {
         }
     }
     
-    while (!func_ends.empty()) {
-        out += "} "; 
-        func_ends.pop_back();
+    while (fe_ptr >= 0) {
+        out += "} ";
+        fe_ptr--;
     }
 
     out.trim();
@@ -138,45 +137,57 @@ String decompileRPN() {
 
 String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     String out = "";
-    std::vector<String> stack;
-    std::vector<int> prec_stack;
+    
+    String stack[64];
+    int prec_stack[64];
+    int sp = -1;
     
     for (int pc = start_pc; pc < end_pc; pc++) {
         Instruction inst = prog[pc];
         
         if (inst.op == OP_VAL) {
-            stack.push_back(String(getF(inst.val)));
-            prec_stack.push_back(10);
+            if (sp < 63) { stack[++sp] = String(getF(inst.val)); prec_stack[sp] = 10; }
         }
         else if (inst.op == OP_T) {
-            stack.push_back("t");
-            prec_stack.push_back(10);
+            if (sp < 63) { stack[++sp] = "t"; prec_stack[sp] = 10; }
         }
         else if (inst.op == OP_LOAD) {
-            stack.push_back(getVarName(inst.val));
-            prec_stack.push_back(10);
+            if (sp < 63) { stack[++sp] = getVarName(inst.val); prec_stack[sp] = 10; }
         }
-        else if ((inst.op == OP_STORE || inst.op == OP_STORE_KEEP || inst.op == OP_ASSIGN_VAR) && stack.size() >= 1) {
-            String val = stack.back(); stack.pop_back(); prec_stack.pop_back();
-            stack.push_back(getVarName(inst.val) + " = " + val);
-            prec_stack.push_back(-1);
+        else if ((inst.op == OP_STORE || inst.op == OP_STORE_KEEP || inst.op == OP_ASSIGN_VAR || (inst.op >= OP_ADD_ASSIGN && inst.op <= OP_SHR_ASSIGN)) && sp >= 0) {
+            String val = stack[sp]; sp--;
+            
+            String op_str = " = ";
+            if (inst.op == OP_ADD_ASSIGN) op_str = " += ";
+            else if (inst.op == OP_SUB_ASSIGN) op_str = " -= ";
+            else if (inst.op == OP_MUL_ASSIGN) op_str = " *= ";
+            else if (inst.op == OP_DIV_ASSIGN) op_str = " /= ";
+            else if (inst.op == OP_MOD_ASSIGN) op_str = " %= ";
+            else if (inst.op == OP_AND_ASSIGN) op_str = " &= ";
+            else if (inst.op == OP_OR_ASSIGN) op_str = " |= ";
+            else if (inst.op == OP_XOR_ASSIGN) op_str = " ^= ";
+            else if (inst.op == OP_POW_ASSIGN) op_str = " **= ";
+            else if (inst.op == OP_SHL_ASSIGN) op_str = " <<= ";
+            else if (inst.op == OP_SHR_ASSIGN) op_str = " >>= ";
+
+            if (sp < 63) { stack[++sp] = getVarName(inst.val) + op_str + val; prec_stack[sp] = -1; }
         }
-        else if (inst.op == OP_POP && stack.size() >= 1) {
-            String val = stack.back(); stack.pop_back(); prec_stack.pop_back();
+        else if (inst.op == OP_POP && sp >= 0) {
+            String val = stack[sp]; sp--;
             if (out != "") out += "; ";
             out += val;
         }
         else if (inst.op == OP_PUSH_FUNC) {
             int target_end = inst.val;
-            std::vector<String> params;
+            String params[8]; int param_cnt = 0;
             int bind_pc = pc + 1;
             while (bind_pc < target_end && prog[bind_pc].op == OP_BIND) {
-                params.push_back(getVarName(prog[bind_pc].val));
+                if (param_cnt < 8) params[param_cnt++] = getVarName(prog[bind_pc].val);
                 bind_pc++;
             }
             
             String func_str = "(";
-            for (int i = params.size() - 1; i >= 0; i--) {
+            for (int i = param_cnt - 1; i >= 0; i--) {
                 func_str += params[i];
                 if (i > 0) func_str += ", ";
             }
@@ -189,132 +200,114 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             
             func_str += decompileInfixRange(prog, inner_start, inner_end) + " }";
             
-            stack.push_back(func_str);
-            prec_stack.push_back(10);
+            if (sp < 63) { stack[++sp] = func_str; prec_stack[sp] = 10; }
             
             pc = target_end - 1;
         }
-        else if (inst.op == OP_DYN_CALL && stack.size() >= inst.val + 1) {
+        else if (inst.op == OP_DYN_CALL && sp >= inst.val) {
             int args = inst.val;
             
-            // Explicitly pops the function pointer safely from the top of the stack
-            String func_name = stack.back();
-            stack.pop_back(); 
-            prec_stack.pop_back();
+            // FOOLPROOF LOGIC: The function name is at the absolute top of the stack
+            String func_name = stack[sp];
             
             String func_call = func_name + "(";
             for (int i = 0; i < args; i++) {
-                func_call += stack[stack.size() - args + i];
+                func_call += stack[sp - args + i];
                 if (i < args - 1) func_call += ", ";
             }
             func_call += ")";
             
-            for (int i = 0; i < args; i++) { 
-                stack.pop_back(); 
-                prec_stack.pop_back(); 
-            }
+            // Pop the function name and all evaluated arguments
+            sp -= (args + 1);
             
-            stack.push_back(func_call);
-            prec_stack.push_back(10);
+            if (sp < 63) { stack[++sp] = func_call; prec_stack[sp] = 10; }
         }
         else if (inst.op == OP_DYN_CALL_IF_FUNC) {
         }
         else if (inst.op == OP_RET || inst.op == OP_BIND || inst.op == OP_UNBIND) {
         }
-        else if (inst.op == OP_VEC && stack.size() >= 1) {
-            int size = stack.back().toInt();
-            stack.pop_back(); prec_stack.pop_back();
-            if (stack.size() >= size) {
+        else if (inst.op == OP_VEC && sp >= 0) {
+            int size = stack[sp].toInt(); sp--;
+            if (sp >= size - 1) {
                 String vec_str = "[";
                 for (int i = 0; i < size; i++) {
-                    vec_str += stack[stack.size() - size + i];
+                    vec_str += stack[sp - size + 1 + i];
                     if (i < size - 1) vec_str += ", ";
                 }
                 vec_str += "]";
-                for (int i = 0; i < size; i++) { stack.pop_back(); prec_stack.pop_back(); }
-                stack.push_back(vec_str);
-                prec_stack.push_back(10);
+                sp -= size;
+                if (sp < 63) { stack[++sp] = vec_str; prec_stack[sp] = 10; }
             }
         }
-        else if (inst.op == OP_AT && stack.size() >= 2) {
-            String idx = stack.back(); stack.pop_back(); prec_stack.pop_back();
-            String vec = stack.back(); stack.pop_back(); prec_stack.pop_back();
-            stack.push_back(vec + "[" + idx + "]");
-            prec_stack.push_back(10);
+        else if (inst.op == OP_AT && sp >= 1) {
+            String idx = stack[sp--]; 
+            String vec = stack[sp--]; 
+            if (sp < 63) { stack[++sp] = vec + "[" + idx + "]"; prec_stack[sp] = 10; }
         }
-        else if (inst.op == OP_COND && stack.size() >= 3) {
-            String f = stack.back(); stack.pop_back(); prec_stack.pop_back();
-            String tv = stack.back(); stack.pop_back(); prec_stack.pop_back();
-            String c = stack.back(); stack.pop_back(); prec_stack.pop_back();
+        else if (inst.op == OP_COND && sp >= 2) {
+            String f = stack[sp--]; 
+            String tv = stack[sp--]; 
+            String c = stack[sp--]; 
             
             if (tv.startsWith("() => { ") && tv.endsWith(" }")) tv = tv.substring(8, tv.length() - 2);
             if (f.startsWith("() => { ") && f.endsWith(" }")) f = f.substring(8, f.length() - 2);
             
-            stack.push_back(c + " ? " + tv + " : " + f);
-            prec_stack.push_back(0);
+            if (sp < 63) { stack[++sp] = c + " ? " + tv + " : " + f; prec_stack[sp] = 0; }
         }
-        else if (inst.op >= OP_SIN && inst.op <= OP_EXP && stack.size() >= 1) { 
-             String val = stack.back(); stack.pop_back(); prec_stack.pop_back();
+        else if (inst.op >= OP_SIN && inst.op <= OP_EXP && sp >= 0) { 
+             String val = stack[sp--]; 
              String sym = getOpSym(inst.op);
-             stack.push_back(sym + "(" + val + ")");
-             prec_stack.push_back(10);
+             if (sp < 63) { stack[++sp] = sym + "(" + val + ")"; prec_stack[sp] = 10; }
         }
-        else if (inst.op >= OP_MIN && inst.op <= OP_POW && stack.size() >= 2) { 
-             String right = stack.back(); stack.pop_back(); prec_stack.pop_back();
-             String left = stack.back(); stack.pop_back(); prec_stack.pop_back();
+        else if (inst.op >= OP_MIN && inst.op <= OP_POW && sp >= 1) { 
+             String right = stack[sp--]; 
+             String left = stack[sp--]; 
              String sym = getOpSym(inst.op);
-             stack.push_back(sym + "(" + left + ", " + right + ")");
-             prec_stack.push_back(10);
+             if (sp < 63) { stack[++sp] = sym + "(" + left + ", " + right + ")"; prec_stack[sp] = 10; }
         }
-        else if ((inst.op == OP_NEG || inst.op == OP_NOT || inst.op == OP_BNOT) && stack.size() >= 1) {
-            String val = stack.back(); 
-            int p = prec_stack.back();
-            stack.pop_back(); prec_stack.pop_back();
+        else if ((inst.op == OP_NEG || inst.op == OP_NOT || inst.op == OP_BNOT) && sp >= 0) {
+            String val = stack[sp]; 
+            int p = prec_stack[sp];
+            sp--;
             
             String sym = getOpSym(inst.op);
             if (inst.op == OP_NEG) sym = "-";
             
             if (p < 9 || val.startsWith("-")) val = "(" + val + ")";
-            stack.push_back(sym + val);
-            prec_stack.push_back(9);
+            if (sp < 63) { stack[++sp] = sym + val; prec_stack[sp] = 9; }
         }
-        else if (stack.size() >= 2) {
-            String right = stack.back(); int rp = prec_stack.back(); stack.pop_back(); prec_stack.pop_back();
-            String left = stack.back(); int lp = prec_stack.back(); stack.pop_back(); prec_stack.pop_back();
+        else if (sp >= 1) {
+            String right = stack[sp]; int rp = prec_stack[sp]; sp--;
+            String left = stack[sp]; int lp = prec_stack[sp]; sp--;
             
             int op_p = getPrecedence(inst.op);
             String sym = getOpSym(inst.op);
             
-            // PEEPHOLE OPTIMIZATION: Translates `-1 *` back into standard `-(...)`
             if (inst.op == OP_MUL && right == "-1") {
                 if (lp < 9 || left.startsWith("-")) left = "(" + left + ")";
-                stack.push_back("-" + left);
-                prec_stack.push_back(9);
+                if (sp < 63) { stack[++sp] = "-" + left; prec_stack[sp] = 9; }
             }
             else if (inst.op == OP_MUL && left == "-1") {
                 if (rp < 9 || right.startsWith("-")) right = "(" + right + ")";
-                stack.push_back("-" + right);
-                prec_stack.push_back(9);
+                if (sp < 63) { stack[++sp] = "-" + right; prec_stack[sp] = 9; }
             }
             else {
                 if (lp < op_p) left = "(" + left + ")";
                 if (rp <= op_p) right = "(" + right + ")";
-                
-                stack.push_back(left + " " + sym + " " + right);
-                prec_stack.push_back(op_p);
+                if (sp < 63) { stack[++sp] = left + " " + sym + " " + right; prec_stack[sp] = op_p; }
             }
         }
     }
     
     String assignments = "";
-    std::vector<String> orphaned_args;
+    String orphaned_args[16]; int oa_cnt = 0;
     
-    for (size_t i = 0; i < stack.size(); i++) {
+    for (int i = 0; i <= sp; i++) {
         if (prec_stack[i] == -1) {
             if (assignments != "") assignments += "; ";
             assignments += stack[i];
         } else {
-            orphaned_args.push_back(stack[i]);
+            if (oa_cnt < 16) orphaned_args[oa_cnt++] = stack[i];
         }
     }
     
@@ -324,13 +317,13 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         final_out += assignments;
     }
     
-    if (orphaned_args.size() >= 1) {
-        String call = orphaned_args.back();
-        if (orphaned_args.size() > 1) {
+    if (oa_cnt >= 1) {
+        String call = orphaned_args[oa_cnt - 1];
+        if (oa_cnt > 1) {
             call += "(";
-            for (size_t i = 0; i < orphaned_args.size() - 1; i++) {
+            for (int i = 0; i < oa_cnt - 1; i++) {
                 call += orphaned_args[i];
-                if (i < orphaned_args.size() - 2) call += ", ";
+                if (i < oa_cnt - 2) call += ", ";
             }
             call += ")";
         }

@@ -51,7 +51,7 @@ String runBytebeatTestSuite() {
         {"-5",                    0, 251, false, true}, 
         {"-(t * 5)",              2, 246, false, true},
         {"-(-t * 5)",             2,  10, false, true},
-        {"t 5 * -1 *",            2, 246, true,  true}, // Explicitly tests the -1*peephole fallback
+        {"t 5 * -1 *",            2, 246, true,  true}, 
         {"-t 5 *",                2, 246, true,  true}, 
         {"t -5 *",                2, 246, true,  true},
         
@@ -63,6 +63,30 @@ String runBytebeatTestSuite() {
         {"v = t * 0.05; f = (x) => x < 0.5 ? -100.0 : 100.0; f(v % 1.0)", 0, 156, false, true},
         {"v = t * 0.05; f = (x) => x < 0.5 ? -100.0 : 100.0; f(v % 1.0)", 15, 100, false, true},
         
+        // --- NEW FEATURES: COMPOUND ASSIGNMENT, SCIENTIFIC NOTATION, COMMA ---
+        {"a = 10; a += 5; a",    0,  15, false, true},
+        {"a = 20; a -= 5; a",    0,  15, false, true},
+        {"a = 10; a *= 2; a",    0,  20, false, true},
+        {"a = 20; a /= 2; a",    0,  10, false, true},
+        {"a = 15; a %= 4; a",    0,   3, false, true},
+        {"a = 15; a &= 7; a",    0,   7, false, true},
+        {"a = 4;  a |= 3; a",    0,   7, false, true},
+        {"a = 15; a ^= 7; a",    0,   8, false, true},
+        {"a = 2;  a <<= 2; a",   0,   8, false, true},
+        {"a = 16; a >>= 2; a",   0,   4, false, true},
+        {"a = 3;  a **= 2; a",   0,   9, false, true},
+        
+        {"10 a = 5 a += a",      0,  15, true,  true},
+        {"2 a = 2 a <<= a",      0,   8, true,  true},
+        
+        {"a = 5, b = 10, a + b", 0,  15, false, true},
+        
+        {"1e2 + 50",             0, 150, false, true},
+        {"1e2 50 +",             0, 150, true,  true},
+        {"2.5e1 * 2",            0,  50, false, true},
+        {"2.5e1 2 *",            0,  50, true,  true},
+        {"1e-1 * 100",           0,  10, false, true},
+
         // --- LOGIC & ARRAYS ---
         {"f = (n) => n < 5 ? 100 : 200; f(2)",   2, 100, false, true}, 
         {"f = (n) => n < 5 ? 100 : 200; f(10)", 10, 200, false, true}, 

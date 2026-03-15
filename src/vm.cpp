@@ -17,6 +17,7 @@ const MathFunc mathLibrary[] = {
 };
 const int mathLibrarySize = 9;
 
+// FIXED: Added all 11 compound operators directly to the native dictionary!
 const OpInfo opList[] = {
     {"+",  OP_ADD, 7}, {"-",  OP_SUB, 7}, {"*",  OP_MUL, 8},
     {"/",  OP_DIV, 8}, {"%",  OP_MOD, 8}, {"&",  OP_AND, 3},
@@ -25,9 +26,15 @@ const OpInfo opList[] = {
     {"==", OP_EQ,  4}, {"!=", OP_NEQ, 4}, {"<=", OP_LTE, 5}, 
     {">=", OP_GTE, 5}, {"<<", OP_SHL, 6}, {">>", OP_SHR, 6},
     {"&&", OP_AND, 3}, {"||", OP_OR, 1},  {"**", OP_POW, 9}, 
-    {"_",  OP_VEC, 10}, {"@", OP_AT, 10} 
+    {"_",  OP_VEC, 10}, {"@", OP_AT, 10},
+    {"+=", OP_ADD_ASSIGN, -1}, {"-=", OP_SUB_ASSIGN, -1},
+    {"*=", OP_MUL_ASSIGN, -1}, {"/=", OP_DIV_ASSIGN, -1},
+    {"%=", OP_MOD_ASSIGN, -1}, {"&=", OP_AND_ASSIGN, -1},
+    {"|=", OP_OR_ASSIGN, -1},  {"^=", OP_XOR_ASSIGN, -1},
+    {"<<=", OP_SHL_ASSIGN, -1},{">>=", OP_SHR_ASSIGN, -1},
+    {"**=", OP_POW_ASSIGN, -1}
 };
-const int opListSize = 23;
+const int opListSize = 34;
 
 int getVarId(String name) {
     for (int i = 0; i < var_count; i++) {
@@ -91,8 +98,11 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         &&L_OP_SIN, &&L_OP_COS, &&L_OP_TAN, &&L_OP_SQRT, &&L_OP_LOG, &&L_OP_EXP,
         &&L_OP_MIN, &&L_OP_MAX, &&L_OP_POW, 
         &&L_OP_JMP, &&L_OP_PUSH_FUNC, &&L_OP_DYN_CALL, &&L_OP_DYN_CALL_IF_FUNC, &&L_OP_RET,
-        &&L_OP_BIND, &&L_OP_UNBIND, &&L_DEFAULT, 
-        &&L_OP_VEC, &&L_OP_AT, &&L_DEFAULT       
+        &&L_OP_BIND, &&L_OP_UNBIND, &&L_OP_ASSIGN_VAR, 
+        &&L_OP_VEC, &&L_OP_AT, 
+        &&L_OP_ADD_ASSIGN, &&L_OP_SUB_ASSIGN, &&L_OP_MUL_ASSIGN, &&L_OP_DIV_ASSIGN, &&L_OP_MOD_ASSIGN,
+        &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN,
+        &&L_DEFAULT       
     };
 
     Instruction* prog = program_bank[bank];
@@ -115,6 +125,7 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_POP: if(sp>=0) sp--; BEEP();
     L_OP_JMP: pc = inst.val - 1; BEEP();
     L_OP_PUSH_FUNC: stack[++sp] = {1, pc + 1}; pc = inst.val - 1; BEEP();
+    L_OP_ASSIGN_VAR: BEEP();
     
     L_OP_DYN_CALL:
         if (stack[sp].type == 1) { 
@@ -199,24 +210,19 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_SUB: stack[sp-1].v = setF(getF(stack[sp-1].v) - getF(stack[sp].v)); sp--; BEEP();
     L_OP_MUL: stack[sp-1].v = setF(getF(stack[sp-1].v) * getF(stack[sp].v)); sp--; BEEP();
     
-    // --- NEW: JS Floating Point Math Parity ---
     L_OP_DIV: {
         float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
         if (d != 0.0f) {
-            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) 
-                stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
-            else 
-                stack[sp-1].v = setF(n / d);
+            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
+            else stack[sp-1].v = setF(n / d);
         } else stack[sp-1].v = setF(0.0f);
         sp--; BEEP();
     }
     L_OP_MOD: {
         float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
         if (d != 0.0f) {
-            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) 
-                stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
-            else 
-                stack[sp-1].v = setF(fmodf(n, d));
+            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
+            else stack[sp-1].v = setF(fmodf(n, d));
         } else stack[sp-1].v = setF(0.0f);
         sp--; BEEP();
     }
@@ -237,6 +243,32 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_MIN: stack[sp-1].v = setF(std::min(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
     L_OP_MAX: stack[sp-1].v = setF(std::max(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
     L_OP_POW: stack[sp-1].v = setF(powf(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
+
+    L_OP_ADD_ASSIGN: { stack[sp].v = setF(getF(vars[inst.val].v) + getF(stack[sp].v)); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_SUB_ASSIGN: { stack[sp].v = setF(getF(vars[inst.val].v) - getF(stack[sp].v)); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_MUL_ASSIGN: { stack[sp].v = setF(getF(vars[inst.val].v) * getF(stack[sp].v)); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_DIV_ASSIGN: {
+        float n = getF(vars[inst.val].v), d = getF(stack[sp].v);
+        if (d != 0.0f) {
+            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp].v = setF((float)((int32_t)n / (int32_t)d));
+            else stack[sp].v = setF(n / d);
+        } else stack[sp].v = setF(0.0f);
+        vars[inst.val] = stack[sp]; BEEP();
+    }
+    L_OP_MOD_ASSIGN: {
+        float n = getF(vars[inst.val].v), d = getF(stack[sp].v);
+        if (d != 0.0f) {
+            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp].v = setF((float)((int32_t)n % (int32_t)d));
+            else stack[sp].v = setF(fmodf(n, d));
+        } else stack[sp].v = setF(0.0f);
+        vars[inst.val] = stack[sp]; BEEP();
+    }
+    L_OP_AND_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) & (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_OR_ASSIGN:  { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) | (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_XOR_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) ^ (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_SHL_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) << (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_SHR_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) >> (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_POW_ASSIGN: { stack[sp].v = setF(powf(getF(vars[inst.val].v), getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
     
     L_DEFAULT: 
         BEEP();

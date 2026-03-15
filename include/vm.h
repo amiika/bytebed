@@ -36,7 +36,9 @@ extern int var_count;
 
 extern const MathFunc mathLibrary[9];
 extern const int mathLibrarySize;
-extern const OpInfo opList[23];
+
+// FIXED: Updated from [23] to [34] to accommodate the new compound operators
+extern const OpInfo opList[34]; 
 extern const int opListSize;
 
 bool getOpCode(const String& sym, OpCode& outCode);

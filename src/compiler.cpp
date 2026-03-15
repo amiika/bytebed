@@ -21,14 +21,12 @@ bool compileRPN(String input) {
     memset(program_bank[target], 0, sizeof(Instruction) * 256);
     int len = 0; 
     
-    // OPTIMIZED: Replaced std::map with a flat C array
     int rpn_func_arity[64];
     for (int i = 0; i < 64; i++) rpn_func_arity[i] = -1;
     
     int block_arity_stack[16]; int bas_ptr = -1;
     int last_completed_arity = 0;
     
-    // OPTIMIZED: Replaced std::vector with a flat C array
     String tokens[128];
     int tok_cnt = 0;
     
@@ -59,18 +57,31 @@ bool compileRPN(String input) {
             tokens[tok_cnt++] = w;
         }
         else if (strchr("(){}=,;<>!+-*/%&|^~@_", *p)) {
-            if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
-                String test = String(*p) + *(p+1);
+            // FIXED: 3-character lookahead added to the RPN lexer so <<=, >>=, and **= are kept intact
+            if (*(p+1) && *(p+2) && strchr("=<>!&|*", *(p+1)) && *(p+2) == '=') {
+                String test3 = String(*p) + *(p+1) + *(p+2);
                 OpCode dummy;
-                if (getOpCode(test, dummy)) {
-                    tokens[tok_cnt++] = test; p += 2; continue;
+                if (getOpCode(test3, dummy)) {
+                    tokens[tok_cnt++] = test3; p += 3; continue;
+                }
+            }
+            if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
+                String test2 = String(*p) + *(p+1);
+                OpCode dummy;
+                if (getOpCode(test2, dummy)) {
+                    tokens[tok_cnt++] = test2; p += 2; continue;
                 }
             }
             if (*p != ',' && *p != ';') tokens[tok_cnt++] = String(*p); 
             p++;
         } else {
             String w = "";
-            while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_", *p) && *p != '\'') w += *p++;
+            while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_", *p) && *p != '\'') {
+                w += *p++;
+                if ((w.endsWith("e") || w.endsWith("E")) && (*p == '+' || *p == '-')) {
+                    w += *p++; 
+                }
+            }
             if (w.length() > 0) tokens[tok_cnt++] = w;
         }
     }
@@ -85,7 +96,7 @@ bool compileRPN(String input) {
         String s = tokens[i];
 
         bool negate = false;
-        if (s.startsWith("-") && s.length() > 1 && !isdigit(s[1])) {
+        if (s.startsWith("-") && s.length() > 1 && !isdigit(s[1]) && s[1] != '.' && s != "-=") {
             negate = true; s = s.substring(1);
         }
 
@@ -140,13 +151,26 @@ bool compileRPN(String input) {
             program_bank[target][len++] = {OP_RET, 0}; program_bank[target][start].val = len;
             if (bas_ptr >= 0) { last_completed_arity = block_arity_stack[bas_ptr--]; }
         }
-        else if (s == "=") {
+        else if (s == "=" || s == "+=" || s == "-=" || s == "*=" || s == "/=" || s == "%=" || s == "&=" || s == "|=" || s == "^=" || s == "<<=" || s == ">>=" || s == "**=") {
             if (len >= 2 && program_bank[target][len-1].op == OP_DYN_CALL_IF_FUNC && program_bank[target][len-2].op == OP_LOAD) {
                 int var_id = program_bank[target][len-2].val; 
-                program_bank[target][len-2].op = OP_STORE; 
+                
+                if (s == "=") program_bank[target][len-2].op = OP_STORE; 
+                else if (s == "+=") program_bank[target][len-2].op = OP_ADD_ASSIGN;
+                else if (s == "-=") program_bank[target][len-2].op = OP_SUB_ASSIGN;
+                else if (s == "*=") program_bank[target][len-2].op = OP_MUL_ASSIGN;
+                else if (s == "/=") program_bank[target][len-2].op = OP_DIV_ASSIGN;
+                else if (s == "%=") program_bank[target][len-2].op = OP_MOD_ASSIGN;
+                else if (s == "&=") program_bank[target][len-2].op = OP_AND_ASSIGN;
+                else if (s == "|=") program_bank[target][len-2].op = OP_OR_ASSIGN;
+                else if (s == "^=") program_bank[target][len-2].op = OP_XOR_ASSIGN;
+                else if (s == "<<=") program_bank[target][len-2].op = OP_SHL_ASSIGN;
+                else if (s == ">>=") program_bank[target][len-2].op = OP_SHR_ASSIGN;
+                else if (s == "**=") program_bank[target][len-2].op = OP_POW_ASSIGN;
+
                 len--;
                 
-                if (len >= 2 && program_bank[target][len-2].op == OP_RET) {
+                if (s == "=" && len >= 2 && program_bank[target][len-2].op == OP_RET) {
                     if (var_id < 64) rpn_func_arity[var_id] = last_completed_arity;
                     for (int k = 0; k < len - 1; k++) {
                         if (program_bank[target][k].op == OP_LOAD && program_bank[target][k].val == var_id) {
@@ -157,7 +181,7 @@ bool compileRPN(String input) {
                         }
                     }
                 } 
-                else if (len >= 2 && program_bank[target][len-2].op == OP_LOAD) {
+                else if (s == "=" && len >= 2 && program_bank[target][len-2].op == OP_LOAD) {
                     int src_id = program_bank[target][len-2].val;
                     if (src_id < 64 && var_id < 64 && rpn_func_arity[src_id] != -1) rpn_func_arity[var_id] = rpn_func_arity[src_id];
                 }
@@ -175,7 +199,7 @@ bool compileRPN(String input) {
         }
         else if (parsing_params) { if (cp_cnt < 8) current_params[cp_cnt++] = getVarId(s); }
         else {
-            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1]))) {
+            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1])) || (s.startsWith("-.") && s.length() > 2 && isdigit(s[2]))) {
                 program_bank[target][len++] = {OP_VAL, setF(strtof(s.c_str(), NULL))};
             }
             else if (s == "t") program_bank[target][len++] = {OP_T, 0};
@@ -222,6 +246,7 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 }
                 program_bank[target][len++] = {OP_COND, 0}; ot--;
             }
+            else if (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN) { program_bank[target][len++] = {os[ot], os_id[ot]}; ot--; }
             else { program_bank[target][len++] = {os[ot--], 0}; }
         } else ot--;
     }
@@ -288,7 +313,7 @@ bool compileInfix(String input, bool reset_t) {
                     if (ot >= 0 && os[ot] == OP_NONE) ot--; 
                     
                     int assigns_to_keep[16]; int atk_cnt = 0;
-                    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR)) {
+                    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
                         if (atk_cnt < 16) assigns_to_keep[atk_cnt++] = os_id[ot];
                         ot--;
                     }
@@ -363,10 +388,33 @@ bool compileInfix(String input, bool reset_t) {
 
             if (*p == '(') {
                 os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; 
-            } else if (*p == '=') { 
-                if (*(p+1) == '=') { program_bank[target][len++] = {OP_LOAD, id}; expect_op = true; } 
-                else { os[++ot] = OP_ASSIGN_VAR; os_id[ot] = id; p++; expect_op = false; }
-            } else { program_bank[target][len++] = {OP_LOAD, id}; expect_op = true; }
+            } else if (*p == '=' && *(p+1) != '=') { 
+                os[++ot] = OP_ASSIGN_VAR; os_id[ot] = id; p++; expect_op = false; 
+            } else if (*p == '+' && *(p+1) == '=') {
+                os[++ot] = OP_ADD_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '-' && *(p+1) == '=') {
+                os[++ot] = OP_SUB_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '*' && *(p+1) == '*' && *(p+2) == '=') {
+                os[++ot] = OP_POW_ASSIGN; os_id[ot] = id; p += 3; expect_op = false;
+            } else if (*p == '*' && *(p+1) == '=' && *(p+2) != '*') {
+                os[++ot] = OP_MUL_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '/' && *(p+1) == '=') {
+                os[++ot] = OP_DIV_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '%' && *(p+1) == '=') {
+                os[++ot] = OP_MOD_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '&' && *(p+1) == '=' && *(p+2) != '&') {
+                os[++ot] = OP_AND_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '|' && *(p+1) == '=' && *(p+2) != '|') {
+                os[++ot] = OP_OR_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '^' && *(p+1) == '=') {
+                os[++ot] = OP_XOR_ASSIGN; os_id[ot] = id; p += 2; expect_op = false;
+            } else if (*p == '<' && *(p+1) == '<' && *(p+2) == '=') {
+                os[++ot] = OP_SHL_ASSIGN; os_id[ot] = id; p += 3; expect_op = false;
+            } else if (*p == '>' && *(p+1) == '>' && *(p+2) == '=') {
+                os[++ot] = OP_SHR_ASSIGN; os_id[ot] = id; p += 3; expect_op = false;
+            } else { 
+                program_bank[target][len++] = {OP_LOAD, id}; expect_op = true; 
+            }
         }
         else if (*p == '\'') {
             if (expect_op) return false;
@@ -478,7 +526,7 @@ bool compileInfix(String input, bool reset_t) {
                 if (ot >= 0 && os[ot] == OP_NONE) ot--; 
                 
                 int assigns_to_keep[16]; int atk_cnt = 0;
-                while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR)) {
+                while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
                     if (atk_cnt < 16) assigns_to_keep[atk_cnt++] = os_id[ot];
                     ot--;
                 }
@@ -520,16 +568,25 @@ bool compileInfix(String input, bool reset_t) {
             if (paren_depth > 0 && bt_ptr >= 0) {
                 if (bracket_types[bt_ptr] == 0) call_arg_counts[cac_ptr]++;
                 else if (bracket_types[bt_ptr] == 1) array_counts[ac_ptr]++;
+            } else {
+                program_bank[target][len++] = {OP_POP, 0};
             }
             p++; 
         }
         else {
             String opStr = ""; opStr += *p;
-            if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
-                String test = opStr + *(p+1);
+            
+            if (*(p+1) && *(p+2) && strchr("=<>!&|*", *(p+1)) && *(p+2) == '=') {
+                String test3 = opStr + *(p+1) + *(p+2);
                 OpCode dummy;
-                if (getOpCode(test, dummy)) opStr = test;
+                if (getOpCode(test3, dummy)) opStr = test3;
             }
+            if (opStr.length() == 1 && *(p+1) && strchr("=<>!&|*", *(p+1))) {
+                String test2 = opStr + *(p+1);
+                OpCode dummy;
+                if (getOpCode(test2, dummy)) opStr = test2;
+            }
+            
             OpCode cur = OP_NONE;
             getOpCode(opStr, cur);
             
@@ -557,7 +614,7 @@ bool compileInfix(String input, bool reset_t) {
             if (ot >= 0 && os[ot] == OP_NONE) ot--; 
             
             int assigns_to_keep[16]; int atk_cnt = 0;
-            while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR)) {
+            while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
                 if (atk_cnt < 16) assigns_to_keep[atk_cnt++] = os_id[ot];
                 ot--;
             }
