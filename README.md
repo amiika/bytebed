@@ -39,6 +39,13 @@ Testing native and cardputer using platformio:
 
 pio test -e native
 
+For more verbose testing:
+
+pio test -e native -v 
+
+
+For testing the hardware:
+
 pio test -e cardputer
 
 

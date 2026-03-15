@@ -21,13 +21,21 @@ bool compileRPN(String input) {
     memset(program_bank[target], 0, sizeof(Instruction) * 256);
     int len = 0; 
     
-    std::map<int, int> rpn_func_arity;
-    std::vector<int> block_arity_stack;
+    // OPTIMIZED: Replaced std::map with a flat C array
+    int rpn_func_arity[64];
+    for (int i = 0; i < 64; i++) rpn_func_arity[i] = -1;
+    
+    int block_arity_stack[16]; int bas_ptr = -1;
     int last_completed_arity = 0;
     
-    std::vector<String> tokens;
+    // OPTIMIZED: Replaced std::vector with a flat C array
+    String tokens[128];
+    int tok_cnt = 0;
+    
     const char* p = input.c_str();
     while (*p) {
+        if (tok_cnt >= 128) break; 
+        
         if (isspace(*p)) p++;
         else if (*p == '-' && *(p+1) && !isspace(*(p+1))) {
             String w = "-"; p++;
@@ -42,37 +50,37 @@ bool compileRPN(String input) {
             } else {
                 while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_", *p)) w += *p++;
             }
-            tokens.push_back(w);
+            tokens[tok_cnt++] = w;
         }
         else if (*p == '\'') {
             String w = "'"; p++;
             while (*p && *p != '\'') w += *p++;
             if (*p == '\'') { w += "'"; p++; }
-            tokens.push_back(w);
+            tokens[tok_cnt++] = w;
         }
         else if (strchr("(){}=,;<>!+-*/%&|^~@_", *p)) {
             if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
                 String test = String(*p) + *(p+1);
                 OpCode dummy;
                 if (getOpCode(test, dummy)) {
-                    tokens.push_back(test); p += 2; continue;
+                    tokens[tok_cnt++] = test; p += 2; continue;
                 }
             }
-            if (*p != ',' && *p != ';') tokens.push_back(String(*p)); 
+            if (*p != ',' && *p != ';') tokens[tok_cnt++] = String(*p); 
             p++;
         } else {
             String w = "";
             while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_", *p) && *p != '\'') w += *p++;
-            if (w.length() > 0) tokens.push_back(w);
+            if (w.length() > 0) tokens[tok_cnt++] = w;
         }
     }
 
-    std::vector<int> block_starts;
-    std::vector<std::vector<int>> block_params;
-    std::vector<int> current_params;
+    int block_starts[16]; int bs_ptr = -1;
+    int block_params[16][8]; int bp_counts[16]; int bp_ptr = -1;
+    int current_params[8]; int cp_cnt = 0;
     bool parsing_params = false;
 
-    for (size_t i = 0; i < tokens.size(); i++) {
+    for (int i = 0; i < tok_cnt; i++) {
         if (len >= 256) return false;
         String s = tokens[i];
 
@@ -83,40 +91,76 @@ bool compileRPN(String input) {
 
         if (s == "(") {
             bool is_params = false;
-            for (size_t j = i + 1; j < tokens.size(); j++) {
-                if (tokens[j] == ")") { if (j + 1 < tokens.size() && tokens[j+1] == "{") is_params = true; break; }
+            for (int j = i + 1; j < tok_cnt; j++) {
+                if (tokens[j] == ")") { if (j + 1 < tok_cnt && tokens[j+1] == "{") is_params = true; break; }
             }
-            if (is_params) { current_params.clear(); parsing_params = true; } 
-            else { block_starts.push_back(len); program_bank[target][len++] = {OP_PUSH_FUNC, 0}; block_params.push_back({}); }
+            if (is_params) { cp_cnt = 0; parsing_params = true; } 
+            else { 
+                if (bs_ptr < 15) block_starts[++bs_ptr] = len; 
+                program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
+                if (bp_ptr < 15) { bp_ptr++; bp_counts[bp_ptr] = 0; }
+            }
         }
         else if (s == ")") {
             if (parsing_params) parsing_params = false;
             else {
-                if (block_starts.empty()) return false;
-                int start = block_starts.back(); block_starts.pop_back(); block_params.pop_back(); 
+                if (bs_ptr < 0) return false;
+                int start = block_starts[bs_ptr--]; bp_ptr--; 
                 program_bank[target][len++] = {OP_RET, 0}; program_bank[target][start].val = len;
             }
         }
         else if (s == "{") {
-            if (i + 2 < tokens.size() && tokens[i+2] == "}") {
+            if (i + 2 < tok_cnt && tokens[i+2] == "}") {
                 int id = getVarId(tokens[i+1]);
-                if (rpn_func_arity.count(id)) { program_bank[target][len++] = {OP_LOAD, id}; i += 2; continue; }
+                if (id < 64 && rpn_func_arity[id] != -1) { program_bank[target][len++] = {OP_LOAD, id}; i += 2; continue; }
             }
-            block_starts.push_back(len); program_bank[target][len++] = {OP_PUSH_FUNC, 0};
-            for (int k = current_params.size() - 1; k >= 0; k--) program_bank[target][len++] = {OP_BIND, current_params[k]};
-            block_params.push_back(current_params); block_arity_stack.push_back(current_params.size()); current_params.clear();
+            if (bs_ptr < 15) block_starts[++bs_ptr] = len; 
+            program_bank[target][len++] = {OP_PUSH_FUNC, 0};
+            
+            for (int k = cp_cnt - 1; k >= 0; k--) program_bank[target][len++] = {OP_BIND, current_params[k]};
+            
+            if (bp_ptr < 15) {
+                bp_ptr++;
+                bp_counts[bp_ptr] = cp_cnt;
+                for (int k = 0; k < cp_cnt; k++) block_params[bp_ptr][k] = current_params[k];
+            }
+            if (bas_ptr < 15) block_arity_stack[++bas_ptr] = cp_cnt;
+            cp_cnt = 0;
         }
         else if (s == "}") {
-            if (block_starts.empty()) return false;
-            int start = block_starts.back(); block_starts.pop_back(); auto params = block_params.back(); block_params.pop_back();
-            for (int param : params) program_bank[target][len++] = {OP_UNBIND, param};
+            if (bs_ptr < 0) return false;
+            int start = block_starts[bs_ptr--]; 
+            
+            int p_cnt = bp_counts[bp_ptr];
+            for (int k = 0; k < p_cnt; k++) {
+                program_bank[target][len++] = {OP_UNBIND, block_params[bp_ptr][k]};
+            }
+            bp_ptr--;
+            
             program_bank[target][len++] = {OP_RET, 0}; program_bank[target][start].val = len;
-            if (!block_arity_stack.empty()) { last_completed_arity = block_arity_stack.back(); block_arity_stack.pop_back(); }
+            if (bas_ptr >= 0) { last_completed_arity = block_arity_stack[bas_ptr--]; }
         }
         else if (s == "=") {
             if (len >= 2 && program_bank[target][len-1].op == OP_DYN_CALL_IF_FUNC && program_bank[target][len-2].op == OP_LOAD) {
-                int var_id = program_bank[target][len-2].val; program_bank[target][len-2].op = OP_STORE; len--;
-                if (len >= 2 && program_bank[target][len-2].op == OP_RET) rpn_func_arity[var_id] = last_completed_arity;
+                int var_id = program_bank[target][len-2].val; 
+                program_bank[target][len-2].op = OP_STORE; 
+                len--;
+                
+                if (len >= 2 && program_bank[target][len-2].op == OP_RET) {
+                    if (var_id < 64) rpn_func_arity[var_id] = last_completed_arity;
+                    for (int k = 0; k < len - 1; k++) {
+                        if (program_bank[target][k].op == OP_LOAD && program_bank[target][k].val == var_id) {
+                            if (program_bank[target][k+1].op == OP_DYN_CALL_IF_FUNC) {
+                                program_bank[target][k+1].op = OP_DYN_CALL;
+                                program_bank[target][k+1].val = last_completed_arity;
+                            }
+                        }
+                    }
+                } 
+                else if (len >= 2 && program_bank[target][len-2].op == OP_LOAD) {
+                    int src_id = program_bank[target][len-2].val;
+                    if (src_id < 64 && var_id < 64 && rpn_func_arity[src_id] != -1) rpn_func_arity[var_id] = rpn_func_arity[src_id];
+                }
             } else return false;
         }
         else if (s.startsWith("'") && s.endsWith("'")) {
@@ -129,7 +173,7 @@ bool compileRPN(String input) {
             program_bank[target][len++] = {OP_VAL, setF(count)};
             program_bank[target][len++] = {OP_VEC, 0};
         }
-        else if (parsing_params) { current_params.push_back(getVarId(s)); }
+        else if (parsing_params) { if (cp_cnt < 8) current_params[cp_cnt++] = getVarId(s); }
         else {
             if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1]))) {
                 program_bank[target][len++] = {OP_VAL, setF(strtof(s.c_str(), NULL))};
@@ -151,7 +195,7 @@ bool compileRPN(String input) {
                 }
                 if (!is_math) {
                     int id = getVarId(s); program_bank[target][len++] = {OP_LOAD, id};
-                    if (rpn_func_arity.count(id)) program_bank[target][len++] = {OP_DYN_CALL, rpn_func_arity[id]};
+                    if (id < 64 && rpn_func_arity[id] != -1) program_bank[target][len++] = {OP_DYN_CALL, rpn_func_arity[id]};
                     else program_bank[target][len++] = {OP_DYN_CALL_IF_FUNC, 0};
                 }
             }
@@ -163,7 +207,7 @@ bool compileRPN(String input) {
     return true;
 }
 
-static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, std::vector<int>* cond_starts, OpCode stopAt = OP_NONE, int minPrec = -1, bool stopAtMarker = false) {
+static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt = OP_NONE, int minPrec = -1, bool stopAtMarker = false) {
     while (ot >= 0 && os[ot] != stopAt) {
         if (stopAtMarker && os[ot] == OP_STORE) break;
         if (os[ot] == OP_DYN_CALL) break; 
@@ -172,9 +216,9 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
             if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, os_id[ot--]}; }
             else if (os[ot] == OP_STORE) { program_bank[target][len++] = {OP_STORE, os_id[ot--]}; }
             else if (os[ot] == OP_COND) {
-                if (cond_starts && !cond_starts->empty()) {
+                if (cs_ptr >= 0) {
                     program_bank[target][len++] = {OP_RET, 0};
-                    program_bank[target][cond_starts->back()].val = len; cond_starts->pop_back();
+                    program_bank[target][cond_starts[cs_ptr--]].val = len;
                 }
                 program_bank[target][len++] = {OP_COND, 0}; ot--;
             }
@@ -183,20 +227,23 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
     }
 }
 
-static bool isFuncDef(const char* p, std::vector<String>& params) {
+static bool isLambdaDef(const char* p, String* params, int& param_cnt, int& consume_len) {
     if (*p != '(') return false;
-    const char* q = p + 1; int depth = 1; String curr = "";
-    while (*q && depth > 0) {
-        if (*q == '(') depth++;
-        else if (*q == ')') {
-            depth--;
-            if (depth == 0) {
-                if (curr.length() > 0) { curr.trim(); if(curr.length()>0) params.push_back(curr); }
-                q++; while (isspace(*q)) q++; return *q == '{';
-            }
-        }
-        else if (*q == ',' && depth == 1) { curr.trim(); if(curr.length()>0) params.push_back(curr); curr = ""; }
-        else curr += *q; q++;
+    const char* q = p + 1;
+    String curr = "";
+    while (*q && *q != ')') {
+        if (*q == '(') return false; 
+        if (*q == ',') { curr.trim(); if(curr.length()>0 && param_cnt < 8) params[param_cnt++] = curr; curr = ""; }
+        else curr += *q;
+        q++;
+    }
+    if (*q != ')') return false;
+    curr.trim(); if(curr.length()>0 && param_cnt < 8) params[param_cnt++] = curr;
+    q++;
+    while (isspace(*q)) q++;
+    if (*q == '=' && *(q+1) == '>') {
+        consume_len = (q + 2) - p;
+        return true;
     }
     return false;
 }
@@ -212,16 +259,52 @@ bool compileInfix(String input, bool reset_t) {
     uint8_t target = 1 - active_bank; memset(program_bank[target], 0, sizeof(Instruction) * 256);
     int len = 0; OpCode os[32]; int os_id[32]; int ot = -1; const char* p = input.c_str();
     int paren_depth = 0; int cond_depth = 0;
-    std::vector<int> block_starts, call_arg_counts, cond_starts;
-    std::vector<std::vector<int>> block_params;
+    
+    int call_arg_counts[16]; int cac_ptr = -1;
+    int cond_starts[16]; int cs_ptr = -1;
+    
+    struct LambdaCtx {
+        int depth;
+        int p_ids[8];
+        int p_cnt;
+        int start_pc;
+        bool uses_braces;
+    };
+    LambdaCtx open_lambdas[8]; int ol_ptr = -1;
 
-    std::vector<int> bracket_types; 
-    std::vector<int> array_counts;
+    int bracket_types[16]; int bt_ptr = -1;
+    int array_counts[16]; int ac_ptr = -1;
 
     bool expect_op = false; 
 
     while (*p) {
         if (len >= 256 || ot >= 31) return false; 
+        
+        if (*p == ')' || *p == ',' || *p == ';' || *p == ']') {
+            while (ol_ptr >= 0) {
+                auto& lam = open_lambdas[ol_ptr];
+                if (!lam.uses_braces && paren_depth <= lam.depth) {
+                    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+                    if (ot >= 0 && os[ot] == OP_NONE) ot--; 
+                    
+                    int assigns_to_keep[16]; int atk_cnt = 0;
+                    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR)) {
+                        if (atk_cnt < 16) assigns_to_keep[atk_cnt++] = os_id[ot];
+                        ot--;
+                    }
+                    
+                    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, lam.p_ids[i]};
+                    program_bank[target][len++] = {OP_RET, 0};
+                    program_bank[target][lam.start_pc].val = len;
+                    
+                    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, assigns_to_keep[i]};
+                    
+                    ol_ptr--;
+                    expect_op = true;
+                } else break;
+            }
+        }
+
         if (isspace(*p)) { p++; continue; }
         
         if (isdigit(*p) || (*p == '.' && isdigit(*(p+1)))) { 
@@ -246,25 +329,40 @@ bool compileInfix(String input, bool reset_t) {
             }
             if (is_math) continue; 
             
+            const char* temp = p;
+            while (isspace(*temp)) temp++;
+            if (*temp == '=' && *(temp+1) == '>') {
+                if (expect_op) return false;
+                int pid = getVarId(word);
+                int start_pc = len;
+                program_bank[target][len++] = {OP_PUSH_FUNC, 0};
+                program_bank[target][len++] = {OP_BIND, pid};
+                
+                temp += 2; 
+                while (isspace(*temp)) temp++;
+                bool braces = (*temp == '{');
+                if (braces) temp++;
+                
+                if (ol_ptr < 7) {
+                    ol_ptr++;
+                    open_lambdas[ol_ptr].depth = paren_depth;
+                    open_lambdas[ol_ptr].p_cnt = 1;
+                    open_lambdas[ol_ptr].p_ids[0] = pid;
+                    open_lambdas[ol_ptr].start_pc = start_pc;
+                    open_lambdas[ol_ptr].uses_braces = braces;
+                }
+                os[++ot] = OP_NONE; 
+                p = temp;
+                expect_op = false;
+                continue;
+            }
+
             int id = getVarId(word); while (isspace(*p)) p++;
 
             if (expect_op) return false; 
 
             if (*p == '(') {
-                std::vector<String> params;
-                if (isFuncDef(p, params)) {
-                    block_starts.push_back(len); program_bank[target][len++] = {OP_PUSH_FUNC, 0};
-                    std::vector<int> p_ids;
-                    for (int i = params.size() - 1; i >= 0; i--) { int pid = getVarId(params[i]); p_ids.push_back(pid); program_bank[target][len++] = {OP_BIND, pid}; }
-                    block_params.push_back(p_ids);
-                    int depth = 1; p++;
-                    while (*p && depth > 0) { if (*p == '(') depth++; else if (*p == ')') depth--; p++; }
-                    while (isspace(*p)) p++; if (*p == '{') p++; 
-                    os[++ot] = OP_STORE; os_id[ot] = id;
-                    expect_op = false; 
-                } else { 
-                    os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; 
-                }
+                os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; 
             } else if (*p == '=') { 
                 if (*(p+1) == '=') { program_bank[target][len++] = {OP_LOAD, id}; expect_op = true; } 
                 else { os[++ot] = OP_ASSIGN_VAR; os_id[ot] = id; p++; expect_op = false; }
@@ -285,33 +383,52 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == '(') { 
             if (expect_op) return false; 
-            std::vector<String> params;
-            if (isFuncDef(p, params)) {
-                block_starts.push_back(len); program_bank[target][len++] = {OP_PUSH_FUNC, 0};
-                std::vector<int> p_ids;
-                for (int i = params.size() - 1; i >= 0; i--) {
-                    int pid = getVarId(params[i]); p_ids.push_back(pid); program_bank[target][len++] = {OP_BIND, pid};
+            
+            String params[8]; int param_cnt = 0;
+            int consume_len = 0;
+            if (isLambdaDef(p, params, param_cnt, consume_len)) {
+                int start_pc = len;
+                program_bank[target][len++] = {OP_PUSH_FUNC, 0};
+                
+                LambdaCtx lam;
+                lam.depth = paren_depth;
+                lam.p_cnt = param_cnt;
+                lam.start_pc = start_pc;
+                
+                for (int i = param_cnt - 1; i >= 0; i--) {
+                    int pid = getVarId(params[i]);
+                    lam.p_ids[i] = pid;
+                    program_bank[target][len++] = {OP_BIND, pid};
                 }
-                block_params.push_back(p_ids);
-                int depth = 1; p++;
-                while (*p && depth > 0) { if (*p == '(') depth++; else if (*p == ')') depth--; p++; }
-                while (isspace(*p)) p++; if (*p == '{') p++; 
+                
+                p += consume_len;
+                while (isspace(*p)) p++;
+                bool braces = (*p == '{');
+                if (braces) p++;
+                lam.uses_braces = braces;
+                
+                if (ol_ptr < 7) open_lambdas[++ol_ptr] = lam;
+                os[++ot] = OP_NONE; 
                 expect_op = false; 
-            } else {
-                os[++ot] = OP_NONE; paren_depth++; bracket_types.push_back(0); 
-                
-                const char* temp = p + 1;
-                while (isspace(*temp)) temp++;
-                if (*temp == ')') call_arg_counts.push_back(0);
-                else call_arg_counts.push_back(1);
-                
-                p++; expect_op = false; 
+                continue;
             }
+
+            os[++ot] = OP_NONE; paren_depth++; 
+            if (bt_ptr < 15) bracket_types[++bt_ptr] = 0;
+            const char* temp = p + 1;
+            while (isspace(*temp)) temp++;
+            if (cac_ptr < 15) {
+                if (*temp == ')') call_arg_counts[++cac_ptr] = 0;
+                else call_arg_counts[++cac_ptr] = 1;
+            }
+            p++; expect_op = false; 
         }
         else if (*p == ')') { 
-            if (paren_depth <= 0 || bracket_types.back() != 0) return false; 
-            flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, -1, true); 
-            int args = call_arg_counts.back(); call_arg_counts.pop_back(); bracket_types.pop_back();
+            if (paren_depth <= 0 || (bt_ptr >= 0 && bracket_types[bt_ptr] != 0)) return false; 
+            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
+            int args = 0; if (cac_ptr >= 0) args = call_arg_counts[cac_ptr--]; 
+            if (bt_ptr >= 0) bt_ptr--;
+            
             if (ot >= 0) { 
                 ot--; 
                 if (ot >= 0) {
@@ -323,25 +440,29 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == '[') {
             if (expect_op) {
-                os[++ot] = OP_NONE; paren_depth++; bracket_types.push_back(2);
+                os[++ot] = OP_NONE; paren_depth++; 
+                if (bt_ptr < 15) bracket_types[++bt_ptr] = 2;
                 expect_op = false;
             } else {
-                os[++ot] = OP_NONE; paren_depth++; bracket_types.push_back(1);
+                os[++ot] = OP_NONE; paren_depth++; 
+                if (bt_ptr < 15) bracket_types[++bt_ptr] = 1;
                 const char* temp = p + 1;
                 while (isspace(*temp)) temp++;
-                if (*temp == ']') array_counts.push_back(0); 
-                else array_counts.push_back(1);
+                if (ac_ptr < 15) {
+                    if (*temp == ']') array_counts[++ac_ptr] = 0; 
+                    else array_counts[++ac_ptr] = 1;
+                }
                 expect_op = false;
             }
             p++;
         }
         else if (*p == ']') {
-            if (paren_depth <= 0 || (bracket_types.back() != 1 && bracket_types.back() != 2)) return false;
-            flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, -1, true);
+            if (paren_depth <= 0 || bt_ptr < 0 || (bracket_types[bt_ptr] != 1 && bracket_types[bt_ptr] != 2)) return false;
+            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
             if (ot >= 0) ot--; 
-            int btype = bracket_types.back(); bracket_types.pop_back();
+            int btype = bracket_types[bt_ptr--];
             if (btype == 1) { 
-                int size = array_counts.back(); array_counts.pop_back(); 
+                int size = 0; if (ac_ptr >= 0) size = array_counts[ac_ptr--]; 
                 program_bank[target][len++] = {OP_VAL, setF(size)};
                 program_bank[target][len++] = {OP_VEC, 0};
             } else { 
@@ -349,39 +470,56 @@ bool compileInfix(String input, bool reset_t) {
             }
             paren_depth--; p++; expect_op = true;
         }
+        else if (*p == '{') { return false; } 
         else if (*p == '}') {
-            flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, -1, true); 
-            if (block_starts.empty()) return false;
-            int start = block_starts.back(); block_starts.pop_back(); auto p_ids = block_params.back(); block_params.pop_back();
-            for (int i = p_ids.size() - 1; i >= 0; i--) { program_bank[target][len++] = {OP_UNBIND, p_ids[i]}; }
-            program_bank[target][len++] = {OP_RET, 0}; program_bank[target][start].val = len;
-            if (ot >= 0 && os[ot] == OP_STORE) { program_bank[target][len++] = {OP_STORE_KEEP, os_id[ot]}; ot--; }
-            p++; expect_op = true; 
+            if (ol_ptr >= 0 && open_lambdas[ol_ptr].uses_braces) {
+                auto& lam = open_lambdas[ol_ptr];
+                flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+                if (ot >= 0 && os[ot] == OP_NONE) ot--; 
+                
+                int assigns_to_keep[16]; int atk_cnt = 0;
+                while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR)) {
+                    if (atk_cnt < 16) assigns_to_keep[atk_cnt++] = os_id[ot];
+                    ot--;
+                }
+                
+                for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, lam.p_ids[i]};
+                program_bank[target][len++] = {OP_RET, 0};
+                program_bank[target][lam.start_pc].val = len;
+                
+                for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, assigns_to_keep[i]};
+                
+                ol_ptr--;
+                p++; expect_op = true; 
+            } else return false;
         }
         else if (*p == '?') { 
             if (!expect_op) return false; expect_op = false;
-            flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, getPrecedence(OP_COND) + 1, true); 
+            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, getPrecedence(OP_COND) + 1, true); 
             os[++ot] = OP_COND; cond_depth++; p++; 
-            program_bank[target][len++] = {OP_PUSH_FUNC, 0}; cond_starts.push_back(len - 1);
+            program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
+            if (cs_ptr < 15) cond_starts[++cs_ptr] = len - 1;
         }
         else if (*p == ':') { 
             if (!expect_op) return false; expect_op = false;
             if (cond_depth <= 0) return false; 
-            flushOps(target, len, os, os_id, ot, &cond_starts, OP_COND, -1, true); 
-            program_bank[target][len++] = {OP_RET, 0}; if (cond_starts.empty()) return false;
-            program_bank[target][cond_starts.back()].val = len; cond_starts.pop_back();
-            program_bank[target][len++] = {OP_PUSH_FUNC, 0}; cond_starts.push_back(len - 1); cond_depth--; p++; 
+            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_COND, -1, true); 
+            program_bank[target][len++] = {OP_RET, 0}; if (cs_ptr < 0) return false;
+            program_bank[target][cond_starts[cs_ptr--]].val = len;
+            program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
+            if (cs_ptr < 15) cond_starts[++cs_ptr] = len - 1; 
+            cond_depth--; p++; 
         }
         else if (*p == ';') { 
-            expect_op = false; flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, -1, true); 
+            expect_op = false; flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
             program_bank[target][len++] = {OP_POP, 0}; p++; 
         }
         else if (*p == ',') { 
             if (!expect_op) return false; expect_op = false;
-            flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, -1, true); 
-            if (paren_depth > 0 && !bracket_types.empty()) {
-                if (bracket_types.back() == 0) call_arg_counts.back()++;
-                else if (bracket_types.back() == 1) array_counts.back()++;
+            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
+            if (paren_depth > 0 && bt_ptr >= 0) {
+                if (bracket_types[bt_ptr] == 0) call_arg_counts[cac_ptr]++;
+                else if (bracket_types[bt_ptr] == 1) array_counts[ac_ptr]++;
             }
             p++; 
         }
@@ -402,19 +540,41 @@ bool compileInfix(String input, bool reset_t) {
                 if (!expect_op && !is_unary) return false; 
                 expect_op = false;
                 
-                // --- NEW: JS Right-Associative Math Parity ---
                 int prec = getPrecedence(cur);
                 if (cur == OP_POW) prec++; 
                 
-                flushOps(target, len, os, os_id, ot, &cond_starts, OP_NONE, prec, true); 
+                flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, prec, true); 
                 os[++ot] = cur; os_id[ot] = 0; p += opStr.length(); 
             } 
             else return false; 
         }
     }
-    if (paren_depth != 0 || cond_depth != 0 || !block_starts.empty()) return false; 
-    flushOps(target, len, os, os_id, ot, &cond_starts);
+    
+    while (ol_ptr >= 0) {
+        auto& lam = open_lambdas[ol_ptr];
+        if (!lam.uses_braces) {
+            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+            if (ot >= 0 && os[ot] == OP_NONE) ot--; 
+            
+            int assigns_to_keep[16]; int atk_cnt = 0;
+            while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR)) {
+                if (atk_cnt < 16) assigns_to_keep[atk_cnt++] = os_id[ot];
+                ot--;
+            }
+            
+            for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, lam.p_ids[i]};
+            program_bank[target][len++] = {OP_RET, 0};
+            program_bank[target][lam.start_pc].val = len;
+            
+            for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, assigns_to_keep[i]};
+            
+            ol_ptr--;
+        } else return false; 
+    }
+
+    if (paren_depth != 0 || cond_depth != 0) return false; 
+    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr);
     if (!validateProgram(target, len)) return false;
     if (reset_t) t_raw = 0; prog_len_bank[target] = len; active_bank = target; 
     return true;
-}   
+}

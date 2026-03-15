@@ -1,6 +1,12 @@
-let wasm, inputPtr, audioCtx, t_audio = 0, t_viz = 0;
+let wasm, inputPtr, audioCtx, t_audio = 0, t_viz = 0, t_frac = 0;
 let is_playing = false, is_rpn = false, is_auto = true;
 let x_scale = 8; 
+
+// --- NEW: Global State for UI ---
+let targetSampleRate = 8000;
+let isFloatbeat = false;
+const rates = [8000, 11025, 22050, 32000, 44100, 48000];
+let currentRateIdx = 0;
 
 const canvas = document.getElementById('viz');
 const ctx = canvas.getContext('2d');
@@ -9,6 +15,28 @@ const modeBtn = document.getElementById('mode-btn');
 const autoBtn = document.getElementById('btn-auto');
 const playBtn = document.getElementById('play-btn');
 const shareBtn = document.getElementById('share-btn');
+
+// --- NEW: UI Handlers ---
+window.cycleRate = function(e) {
+    if(e) e.stopPropagation();
+    currentRateIdx = (currentRateIdx + 1) % rates.length;
+    targetSampleRate = rates[currentRateIdx];
+    e.target.innerText = targetSampleRate + "HZ";
+    if (wasm && wasm.wasm_set_sample_rate) {
+        wasm.wasm_set_sample_rate(targetSampleRate);
+    }
+};
+
+window.toggleFormat = function(e) {
+    if(e) e.stopPropagation();
+    isFloatbeat = !isFloatbeat;
+    e.target.innerText = isFloatbeat ? "FLOATBEAT" : "BYTEBEAT";
+    if (isFloatbeat) e.target.classList.remove('active');
+    else e.target.classList.add('active');
+    if (wasm && wasm.wasm_set_play_mode) {
+        wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+    }
+};
 
 function autoExpand() {
     formulaInput.style.height = 'auto';
@@ -41,7 +69,7 @@ function togglePlay(e) {
     is_playing = !is_playing;
     playBtn.innerText = is_playing ? "STOP" : "START";
     if (is_playing) playBtn.classList.add('active'); else playBtn.classList.remove('active');
- }
+}
 
 function shareCode(e) {
     if(e) e.stopPropagation();
@@ -80,8 +108,11 @@ function toggleMode(e) {
 async function boot() {
     if (audioCtx) return; 
     const AudioContext = window.AudioContext || window.webkitAudioContext;
-    audioCtx = new AudioContext({ sampleRate: 8000 });
+    
+    // Let the browser pick the hardware sample rate (e.g., 44100 or 48000)
+    audioCtx = new AudioContext(); 
     await audioCtx.resume();
+    
     try {
         const response = await fetch('../wasm/bytebed.wasm');
         const bytes = await response.arrayBuffer();
@@ -89,11 +120,31 @@ async function boot() {
         wasm = results.instance.exports;
         if (wasm._initialize) wasm._initialize(); 
         inputPtr = wasm.get_input_buffer();
+        
+        // Sync initial UI state to Wasm
+        if (wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(targetSampleRate);
+        if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+
         const node = audioCtx.createScriptProcessor(1024, 1, 1);
         node.onaudioprocess = (e) => {
             const out = e.outputBuffer.getChannelData(0);
             if (!wasm || !is_playing) { out.fill(0); return; }
-            for (let i = 0; i < out.length; i++) out[i] = (wasm.wasm_execute(t_audio++) - 128) / 128.0;
+            
+            // Calculate fractional step based on UI Target vs Hardware Target
+            const timeStep = targetSampleRate / audioCtx.sampleRate;
+            
+            for (let i = 0; i < out.length; i++) {
+                let sample = wasm.wasm_execute(t_audio);
+                out[i] = (sample - 128) / 128.0;
+                
+                // Advance fractional time
+                t_frac += timeStep;
+                if (t_frac >= 1.0) {
+                    let steps = Math.floor(t_frac);
+                    t_audio += steps;
+                    t_frac -= steps;
+                }
+            }
         };
         node.connect(audioCtx.destination);
         canvas.width = canvas.clientWidth;
@@ -106,7 +157,9 @@ async function boot() {
         playBtn.classList.add('active');
         requestAnimationFrame(renderLoop);
         window.history.replaceState({}, document.title, window.location.pathname);
-    } catch (err) { statusText.innerText = `ERR: ${err.message}`; }
+    } catch (err) { 
+        document.getElementById('status').innerText = `ERR: ${err.message}`; 
+    }
 }
 
 function compile(str) {
@@ -121,7 +174,9 @@ function compile(str) {
 }
 
 function toggleAuto(e) { if(e) e.stopPropagation(); is_auto = !is_auto; autoBtn.classList.toggle('active', is_auto); }
-function resetT(e) { if(e) e.stopPropagation(); t_audio = 0; t_viz = 0; }
+
+// Clears the fractional time when resetting to keep sync tight
+function resetT(e) { if(e) e.stopPropagation(); t_audio = 0; t_frac = 0; t_viz = 0; }
 
 function renderLoop() {
     requestAnimationFrame(renderLoop);
@@ -135,7 +190,8 @@ function renderLoop() {
         if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
     }
     ctx.stroke();
-    t_viz += 20;
+    // Scale visualizer speed based on sample rate to match audio feel
+    t_viz += 20 * (targetSampleRate / 8000);
 }
 
 window.addEventListener('mousedown', boot, { once: true });
