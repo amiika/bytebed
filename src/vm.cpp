@@ -2,7 +2,7 @@
 #include <math.h>
 #include <algorithm>
 
-Instruction program_bank[2][256];
+Instruction program_bank[2][512];
 int prog_len_bank[2] = {0, 0};
 volatile uint8_t active_bank = 0;
 
@@ -10,12 +10,47 @@ Val vars[64];
 String symNames[64];
 int var_count = 0;
 
+float* global_array_mem = nullptr;
+int32_t global_array_capacity = 0;
+
+float local_array_mem[1024];
+int local_array_ptr = 0;
+
+void clear_global_array() {
+    if (global_array_mem && global_array_capacity > 0) {
+        memset(global_array_mem, 0, global_array_capacity * sizeof(float));
+    }
+}
+
+void ensure_global_array(int32_t req_size) {
+    if (req_size <= 0 || req_size > 262144) return; 
+    if (req_size > global_array_capacity) {
+        if (global_array_mem) free(global_array_mem);
+        
+        #if defined(ESP32)
+        global_array_mem = (float*)ps_malloc(req_size * sizeof(float));
+        if (!global_array_mem) global_array_mem = (float*)malloc(req_size * sizeof(float));
+        #else
+        global_array_mem = (float*)malloc(req_size * sizeof(float));
+        #endif
+        
+        if (global_array_mem) {
+            memset(global_array_mem, 0, req_size * sizeof(float));
+            global_array_capacity = req_size;
+        } else {
+            global_array_capacity = 0;
+        }
+    }
+}
+
 const MathFunc mathLibrary[] = {
-    {"sin",  OP_SIN,  true},  {"cos",  OP_COS,  true},  {"tan",  OP_TAN,  true},
-    {"sqrt", OP_SQRT, true},  {"log",  OP_LOG,  true},  {"exp",  OP_EXP,  true},
-    {"min",  OP_MIN,  false}, {"max",  OP_MAX,  false}, {"pow",  OP_POW,  false}
+    {"sin",   OP_SIN,   true},  {"cos",   OP_COS,   true},  {"tan",   OP_TAN,   true},
+    {"sqrt",  OP_SQRT,  true},  {"log",   OP_LOG,   true},  {"exp",   OP_EXP,   true},
+    {"abs",   OP_ABS,   true},  {"floor", OP_FLOOR, true},  {"ceil",  OP_CEIL,  true},
+    {"round", OP_ROUND, true},
+    {"min",   OP_MIN,   false}, {"max",   OP_MAX,   false}, {"pow",   OP_POW,   false}
 };
-const int mathLibrarySize = 9;
+const int mathLibrarySize = 13;
 
 const OpInfo opList[] = {
     {"+",  OP_ADD, 7}, {"-",  OP_SUB, 7}, {"*",  OP_MUL, 8},
@@ -25,7 +60,8 @@ const OpInfo opList[] = {
     {"==", OP_EQ,  4}, {"!=", OP_NEQ, 4}, {"<=", OP_LTE, 5}, 
     {">=", OP_GTE, 5}, {"<<", OP_SHL, 6}, {">>", OP_SHR, 6},
     {"&&", OP_SC_AND, 3}, {"||", OP_SC_OR, 1}, {"**", OP_POW, 9}, 
-    {"_",  OP_VEC, 10}, {"@", OP_AT, 10},
+    {"_",  OP_VEC, 10}, {"@", OP_AT, 10}, {"#", OP_STORE_AT, -1},
+    {"$",  OP_ALLOC, 10}, {":=", OP_STORE_KEEP, -1},
     {"+=", OP_ADD_ASSIGN, -1}, {"-=", OP_SUB_ASSIGN, -1},
     {"*=", OP_MUL_ASSIGN, -1}, {"/=", OP_DIV_ASSIGN, -1},
     {"%=", OP_MOD_ASSIGN, -1}, {"&=", OP_AND_ASSIGN, -1},
@@ -33,7 +69,7 @@ const OpInfo opList[] = {
     {"<<=", OP_SHL_ASSIGN, -1},{">>=", OP_SHR_ASSIGN, -1},
     {"**=", OP_POW_ASSIGN, -1}
 };
-const int opListSize = 34;
+const int opListSize = 37;
 
 int getVarId(String name) {
     for (int i = 0; i < var_count; i++) {
@@ -54,7 +90,7 @@ int getPrecedence(OpCode op) {
         if (opList[i].code == op) return opList[i].precedence;
     }
     if (op == OP_COND) return 0;
-    if (op == OP_ASSIGN_VAR || (op >= OP_ADD_ASSIGN && op <= OP_SHR_ASSIGN)) return -1;
+    if (op == OP_ASSIGN_VAR || op == OP_STORE_AT || (op >= OP_ADD_ASSIGN && op <= OP_SHR_ASSIGN)) return -1;
     if (op == OP_STORE || op == OP_STORE_KEEP) return -2;
     if (op == OP_NONE || op == OP_DYN_CALL || op == OP_DYN_CALL_IF_FUNC) return -3;
     return 10; 
@@ -83,10 +119,11 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     int len = prog_len_bank[bank];
     if (len == 0) return 128;
     
-    static Val stack[256]; int sp = -1;
-    static int32_t call_stack[256]; int csp = -1;
+    local_array_ptr = 0; 
     
-    static Val shadow_val[256]; int ssp = -1;
+    static Val stack[512]; int sp = -1;
+    static int32_t call_stack[512]; int csp = -1;
+    static Val shadow_val[512]; int ssp = -1;
 
     static const void* dispatch_table[] = {
         &&L_OP_VAL, &&L_OP_T, &&L_OP_LOAD, &&L_OP_STORE, &&L_OP_STORE_KEEP, &&L_OP_POP,
@@ -95,10 +132,12 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         &&L_OP_LT,  &&L_OP_GT,  &&L_OP_EQ,  &&L_OP_NEQ, &&L_OP_LTE, &&L_OP_GTE,
         &&L_OP_COND, &&L_OP_NEG, &&L_OP_NOT, &&L_OP_BNOT,               
         &&L_OP_SIN, &&L_OP_COS, &&L_OP_TAN, &&L_OP_SQRT, &&L_OP_LOG, &&L_OP_EXP,
+        &&L_OP_ABS, &&L_OP_FLOOR, &&L_OP_CEIL, &&L_OP_ROUND,
         &&L_OP_MIN, &&L_OP_MAX, &&L_OP_POW, 
         &&L_OP_JMP, &&L_OP_PUSH_FUNC, &&L_OP_DYN_CALL, &&L_OP_DYN_CALL_IF_FUNC, &&L_OP_RET,
         &&L_OP_BIND, &&L_OP_UNBIND, &&L_OP_ASSIGN_VAR, 
-        &&L_OP_VEC, &&L_OP_AT, &&L_OP_SC_AND, &&L_OP_SC_OR, &&L_DEFAULT,
+        &&L_OP_ALLOC, &&L_OP_VEC, &&L_OP_AT, &&L_OP_STORE_AT, 
+        &&L_OP_SC_AND, &&L_OP_SC_OR, &&L_DEFAULT,
         &&L_OP_ADD_ASSIGN, &&L_OP_SUB_ASSIGN, &&L_OP_MUL_ASSIGN, &&L_OP_DIV_ASSIGN, &&L_OP_MOD_ASSIGN,
         &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN
     };
@@ -118,16 +157,17 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_VAL: stack[++sp] = {0, inst.val}; BEEP();
     L_OP_T:   stack[++sp] = {0, setF(t)}; BEEP();
     L_OP_LOAD: stack[++sp] = vars[inst.val]; BEEP();
+    
     L_OP_STORE: if(sp>=0) vars[inst.val] = stack[sp--]; BEEP();
     L_OP_STORE_KEEP: if(sp>=0) vars[inst.val] = stack[sp]; BEEP();
     L_OP_POP: if(sp>=0) sp--; BEEP();
-    L_OP_JMP: pc = inst.val - 1; BEEP();
-    L_OP_PUSH_FUNC: stack[++sp] = {1, pc + 1}; pc = inst.val - 1; BEEP();
+    L_OP_JMP: pc += inst.val - 1; BEEP(); 
+    L_OP_PUSH_FUNC: stack[++sp] = {1, pc + 1}; pc += inst.val - 1; BEEP(); 
     L_OP_ASSIGN_VAR: BEEP();
     
     L_OP_DYN_CALL:
         if (stack[sp].type == 1) { 
-            if (csp < 255) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
+            if (csp < 511) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
             else sp--; 
         } else {
             int args = inst.val;
@@ -138,7 +178,7 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         
     L_OP_DYN_CALL_IF_FUNC:
         if (stack[sp].type == 1) { 
-            if (csp < 255) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
+            if (csp < 511) { call_stack[++csp] = pc; pc = stack[sp--].v - 1; }
             else sp--;
         }
         BEEP();
@@ -147,7 +187,7 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     
     L_OP_BIND: 
         if (sp >= 0) {
-            if (ssp < 255) shadow_val[++ssp] = vars[inst.val];
+            if (ssp < 511) shadow_val[++ssp] = vars[inst.val];
             vars[inst.val] = stack[sp--];
         }
         BEEP();
@@ -156,30 +196,90 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         if (ssp >= 0) vars[inst.val] = shadow_val[ssp--]; 
         BEEP();
     
-    L_OP_VEC: 
-        if (sp >= 0) stack[sp].type = 2; 
-        BEEP();
+    L_OP_VEC: {
+        if (sp < 0) return 128;
+        int32_t size = (int32_t)getF(stack[sp].v);
         
-    L_OP_AT: {
-        if (sp < 1) return 128; 
-        int32_t idx = (int32_t)getF(stack[sp--].v);
-        int32_t size = (int32_t)getF(stack[sp--].v);
-        if (size <= 0 || sp < size - 1) return 128; 
-        idx = ((idx % size) + size) % size;
-        int32_t res = stack[sp - size + 1 + idx].v; 
-        sp -= size; 
-        stack[++sp] = {0, res}; 
+        if (size >= 1 && sp >= size) {
+            int offset = local_array_ptr;
+            for (int i = 0; i < size; i++) {
+                if (local_array_ptr < 1024) local_array_mem[local_array_ptr++] = getF(stack[sp - size + i].v);
+            }
+            sp -= size; 
+            stack[sp].type = 2; 
+            stack[sp].v = (offset << 16) | (size & 0xFFFF); 
+        }
         BEEP();
     }
     
-    // NEW: Dual-Mode Execution Logic for &&
+    L_OP_ALLOC: {
+        if (sp < 0) return 128;
+        int32_t size = (int32_t)getF(stack[sp].v);
+        if (size > 0) ensure_global_array(size); 
+        stack[sp].type = 3; 
+        stack[sp].v = setF((float)(global_array_capacity > 0 ? global_array_capacity : size));
+        BEEP();
+    }
+        
+    L_OP_AT: {
+        if (sp < 1) return 128; 
+        Val base_val = stack[sp--]; 
+        int32_t idx = (int32_t)getF(stack[sp--].v);
+        
+        if (base_val.type == 2) { 
+            int32_t meta = base_val.v;
+            int offset = meta >> 16;
+            int size = meta & 0xFFFF;
+            if (size > 0) idx = ((idx % size) + size) % size;
+            float res = 0.0f;
+            if (offset + idx < 1024) res = local_array_mem[offset + idx];
+            stack[++sp] = {0, setF(res)};
+        } 
+        else if (base_val.type == 3) { 
+            if (global_array_capacity > 0 && global_array_mem) {
+                idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity; 
+                stack[++sp] = {0, setF(global_array_mem[idx])};
+            } else {
+                stack[++sp] = {0, 0};
+            }
+        } 
+        else {
+            stack[++sp] = {0, 0};
+        }
+        BEEP();
+    }
+    
+    L_OP_STORE_AT: {
+        if (sp < 2) return 128;
+        Val base_val = stack[sp--];
+        int32_t idx = (int32_t)getF(stack[sp--].v);
+        float val = getF(stack[sp--].v);
+        
+        if (base_val.type == 2) { 
+            int32_t meta = base_val.v;
+            int offset = meta >> 16;
+            int size = meta & 0xFFFF;
+            if (size > 0) idx = ((idx % size) + size) % size;
+            if (offset + idx < 1024) local_array_mem[offset + idx] = val;
+        } 
+        else if (base_val.type == 3) { 
+            if (global_array_capacity > 0 && global_array_mem) {
+                idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity;
+                global_array_mem[idx] = val; 
+            }
+        } 
+        
+        stack[++sp] = {0, setF(val)}; 
+        BEEP();
+    }
+    
     L_OP_SC_AND: {
-        if (inst.val != 0) { // Infix Mode: Evaluate left and conditionally jump
+        if (inst.val != 0) { 
             if (sp >= 0) {
-                if (getF(stack[sp].v) == 0.0f) pc = inst.val - 1; 
+                if (getF(stack[sp].v) == 0.0f) pc += inst.val - 1; 
                 else sp--; 
             }
-        } else { // RPN Mode: Both sides are evaluated, logically pop
+        } else { 
             if (sp >= 1) {
                 if (getF(stack[sp-1].v) == 0.0f) sp--; 
                 else { stack[sp-1] = stack[sp]; sp--; }
@@ -188,14 +288,13 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         BEEP();
     }
     
-    // NEW: Dual-Mode Execution Logic for ||
     L_OP_SC_OR: {
-        if (inst.val != 0) { // Infix Mode
+        if (inst.val != 0) { 
             if (sp >= 0) {
-                if (getF(stack[sp].v) != 0.0f) pc = inst.val - 1; 
+                if (getF(stack[sp].v) != 0.0f) pc += inst.val - 1; 
                 else sp--; 
             }
-        } else { // RPN Mode
+        } else { 
             if (sp >= 1) {
                 if (getF(stack[sp-1].v) != 0.0f) sp--; 
                 else { stack[sp-1] = stack[sp]; sp--; }
@@ -208,30 +307,23 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_NOT: stack[sp].v = setF(getF(stack[sp].v) == 0.0f ? 1.0f : 0.0f); BEEP();
     L_OP_BNOT: stack[sp].v = setF((float)(~(int32_t)getF(stack[sp].v))); BEEP();
     
-    L_OP_SIN: {
-        float val = getF(stack[sp].v);
-        stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + sinf(val/128.0f*M_PI)*127.0f : sinf(val));
-        BEEP();
-    }
-    L_OP_COS: {
-        float val = getF(stack[sp].v);
-        stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + cosf(val/128.0f*M_PI)*127.0f : cosf(val));
-        BEEP();
-    }
-    L_OP_TAN: {
-        float val = getF(stack[sp].v);
-        stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + tanf(val/128.0f*M_PI)*127.0f : tanf(val));
-        BEEP();
-    }
+    L_OP_SIN: { float val = getF(stack[sp].v); stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + sinf(val/128.0f*M_PI)*127.0f : sinf(val)); BEEP(); }
+    L_OP_COS: { float val = getF(stack[sp].v); stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + cosf(val/128.0f*M_PI)*127.0f : cosf(val)); BEEP(); }
+    L_OP_TAN: { float val = getF(stack[sp].v); stack[sp].v = setF(current_play_mode == MODE_BYTEBEAT ? 128.0f + tanf(val/128.0f*M_PI)*127.0f : tanf(val)); BEEP(); }
     
-    L_OP_SQRT: stack[sp].v = setF(getF(stack[sp].v) >= 0.0f ? sqrtf(getF(stack[sp].v)) : 0.0f); BEEP();
-    L_OP_LOG:  stack[sp].v = setF(getF(stack[sp].v) > 0.0f ? logf(getF(stack[sp].v)) : 0.0f); BEEP();
-    L_OP_EXP:  stack[sp].v = setF(expf(getF(stack[sp].v))); BEEP();
+    L_OP_SQRT:  stack[sp].v = setF(getF(stack[sp].v) >= 0.0f ? sqrtf(getF(stack[sp].v)) : 0.0f); BEEP();
+    L_OP_LOG:   stack[sp].v = setF(getF(stack[sp].v) > 0.0f ? logf(getF(stack[sp].v)) : 0.0f); BEEP();
+    L_OP_EXP:   stack[sp].v = setF(expf(getF(stack[sp].v))); BEEP();
+    L_OP_ABS:   stack[sp].v = setF(fabsf(getF(stack[sp].v))); BEEP();
+    L_OP_FLOOR: stack[sp].v = setF(floorf(getF(stack[sp].v))); BEEP();
+    L_OP_CEIL:  stack[sp].v = setF(ceilf(getF(stack[sp].v))); BEEP();
+    L_OP_ROUND: stack[sp].v = setF(roundf(getF(stack[sp].v))); BEEP();
     
     L_OP_COND: { 
+        if(sp < 2) return 128;
         Val f = stack[sp--]; Val tv = stack[sp--]; Val c = stack[sp--]; 
         Val target = (getF(c.v) != 0.0f) ? tv : f;
-        if (target.type == 1) { if (csp < 255) { call_stack[++csp] = pc; pc = target.v - 1; } } 
+        if (target.type == 1) { if (csp < 511) { call_stack[++csp] = pc; pc = target.v - 1; } } 
         else { stack[++sp] = target; }
         BEEP(); 
     }
@@ -242,18 +334,12 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     
     L_OP_DIV: {
         float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
-        if (d != 0.0f) {
-            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n / (int32_t)d));
-            else stack[sp-1].v = setF(n / d);
-        } else stack[sp-1].v = setF(0.0f);
+        stack[sp-1].v = setF(d != 0.0f ? (n / d) : 0.0f);
         sp--; BEEP();
     }
     L_OP_MOD: {
         float n = getF(stack[sp-1].v), d = getF(stack[sp].v);
-        if (d != 0.0f) {
-            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp-1].v = setF((float)((int32_t)n % (int32_t)d));
-            else stack[sp-1].v = setF(fmodf(n, d));
-        } else stack[sp-1].v = setF(0.0f);
+        stack[sp-1].v = setF(d != 0.0f ? fmodf(n, d) : 0.0f);
         sp--; BEEP();
     }
     
@@ -274,31 +360,17 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
     L_OP_MAX: stack[sp-1].v = setF(std::max(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
     L_OP_POW: stack[sp-1].v = setF(powf(getF(stack[sp-1].v), getF(stack[sp].v))); sp--; BEEP();
 
-    L_OP_ADD_ASSIGN: { stack[sp].v = setF(getF(vars[inst.val].v) + getF(stack[sp].v)); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_SUB_ASSIGN: { stack[sp].v = setF(getF(vars[inst.val].v) - getF(stack[sp].v)); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_MUL_ASSIGN: { stack[sp].v = setF(getF(vars[inst.val].v) * getF(stack[sp].v)); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_DIV_ASSIGN: {
-        float n = getF(vars[inst.val].v), d = getF(stack[sp].v);
-        if (d != 0.0f) {
-            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp].v = setF((float)((int32_t)n / (int32_t)d));
-            else stack[sp].v = setF(n / d);
-        } else stack[sp].v = setF(0.0f);
-        vars[inst.val] = stack[sp]; BEEP();
-    }
-    L_OP_MOD_ASSIGN: {
-        float n = getF(vars[inst.val].v), d = getF(stack[sp].v);
-        if (d != 0.0f) {
-            if (current_play_mode == MODE_BYTEBEAT && n == (int32_t)n && d == (int32_t)d) stack[sp].v = setF((float)((int32_t)n % (int32_t)d));
-            else stack[sp].v = setF(fmodf(n, d));
-        } else stack[sp].v = setF(0.0f);
-        vars[inst.val] = stack[sp]; BEEP();
-    }
-    L_OP_AND_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) & (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_OR_ASSIGN:  { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) | (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_XOR_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) ^ (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_SHL_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) << (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_SHR_ASSIGN: { stack[sp].v = setF((float)((int32_t)getF(vars[inst.val].v) >> (int32_t)getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
-    L_OP_POW_ASSIGN: { stack[sp].v = setF(powf(getF(vars[inst.val].v), getF(stack[sp].v))); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_ADD_ASSIGN: { float res = getF(vars[inst.val].v) + getF(stack[sp].v); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_SUB_ASSIGN: { float res = getF(vars[inst.val].v) - getF(stack[sp].v); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_MUL_ASSIGN: { float res = getF(vars[inst.val].v) * getF(stack[sp].v); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_DIV_ASSIGN: { float n = getF(vars[inst.val].v), d = getF(stack[sp].v); float res = (d != 0.0f ? (n / d) : 0.0f); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_MOD_ASSIGN: { float n = getF(vars[inst.val].v), d = getF(stack[sp].v); float res = (d != 0.0f ? fmodf(n, d) : 0.0f); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_AND_ASSIGN: { float res = (float)((int32_t)getF(vars[inst.val].v) & (int32_t)getF(stack[sp].v)); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_OR_ASSIGN:  { float res = (float)((int32_t)getF(vars[inst.val].v) | (int32_t)getF(stack[sp].v)); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_XOR_ASSIGN: { float res = (float)((int32_t)getF(vars[inst.val].v) ^ (int32_t)getF(stack[sp].v)); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_SHL_ASSIGN: { float res = (float)((int32_t)getF(vars[inst.val].v) << (int32_t)getF(stack[sp].v)); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_SHR_ASSIGN: { float res = (float)((int32_t)getF(vars[inst.val].v) >> (int32_t)getF(stack[sp].v)); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
+    L_OP_POW_ASSIGN: { float res = powf(getF(vars[inst.val].v), getF(stack[sp].v)); stack[sp].v = setF(res); vars[inst.val] = stack[sp]; BEEP(); }
     
     L_DEFAULT: 
         BEEP();
@@ -308,20 +380,19 @@ uint8_t IRAM_ATTR execute_vm(int32_t t) {
         float out_val = 0.0f;
         bool is_bytebeat = (current_play_mode == MODE_BYTEBEAT);
         
-        if (stack[sp].type == 2) {
-            int32_t size = (int32_t)getF(stack[sp].v);
-            if (size > 0 && sp >= size) {
-                if (size >= 2) {
-                    float L = getF(stack[sp - size].v);
-                    float R = getF(stack[sp - size + 1].v);
-                    if (is_bytebeat) {
-                        return (uint8_t)((((int32_t)L & 255) + ((int32_t)R & 255)) / 2);
-                    } else {
-                        out_val = (L + R) / 2.0f;
-                    }
-                } else {
-                    out_val = getF(stack[sp - size].v);
-                }
+        if (stack[sp].type == 2 || stack[sp].type == 3) {
+            int32_t meta = stack[sp].v;
+            int offset = meta >> 16;
+            int size = meta & 0xFFFF;
+            if (stack[sp].type == 2 && size >= 2) {
+                float L = offset < 1024 ? local_array_mem[offset] : 0.0f;
+                float R = offset + 1 < 1024 ? local_array_mem[offset + 1] : 0.0f;
+                if (is_bytebeat) return (uint8_t)((((int32_t)L & 255) + ((int32_t)R & 255)) / 2);
+                else out_val = (L + R) / 2.0f;
+            } else if (stack[sp].type == 2 && size == 1) {
+                out_val = offset < 1024 ? local_array_mem[offset] : 0.0f;
+            } else {
+                out_val = size;
             }
         } else {
             out_val = getF(stack[sp].v);

@@ -27,18 +27,22 @@ struct OpInfo {
     int precedence;
 };
 
-extern Instruction program_bank[2][256];
+extern Instruction program_bank[2][512];
 extern int prog_len_bank[2];
 extern volatile uint8_t active_bank;
 
 extern Val vars[64];
 extern int var_count;
 
-extern const MathFunc mathLibrary[9];
-extern const int mathLibrarySize;
+// PSRAM Memory Management
+extern float* global_array_mem;
+extern int32_t global_array_capacity;
+void clear_global_array();
+void ensure_global_array(int32_t req_size);
 
-// FIXED: Updated from [23] to [34] to accommodate the new compound operators
-extern const OpInfo opList[34]; 
+extern const MathFunc mathLibrary[13];
+extern const int mathLibrarySize;
+extern const OpInfo opList[37]; 
 extern const int opListSize;
 
 bool getOpCode(const String& sym, OpCode& outCode);
