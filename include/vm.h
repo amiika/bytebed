@@ -12,7 +12,10 @@ struct Instruction {
 
 struct Val {
     uint8_t type; 
-    int32_t v;
+    union {
+        int32_t v;
+        float f;
+    };
 };
 
 struct MathFunc {
@@ -39,22 +42,23 @@ extern int32_t global_array_capacity;
 void clear_global_array();
 void ensure_global_array(int32_t req_size);
 
+void init_vm_math();
+float fast_sin(float x);
+float fast_pow(float a, float b);
+
 extern const MathFunc mathLibrary[17];
 extern const int mathLibrarySize;
 extern const OpInfo opList[37]; 
 extern const int opListSize;
 
 bool getOpCode(const String& sym, OpCode& outCode);
-
 int getVarId(String name);
 String getVarName(int id);
 int getPrecedence(OpCode op);
 String getOpSym(OpCode op);
-
 bool compileRPN(String input);
 bool compileInfix(String input, bool reset_t = false);
 String decompile(bool to_rpn);
-
 bool validateProgram(uint8_t bank, int len);
-
+void execute_vm_block(int32_t start_t, int length, uint8_t* out_buf);
 uint8_t execute_vm(int32_t t);

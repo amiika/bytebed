@@ -144,7 +144,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
             if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || op == OP_SIN || op == OP_COS || op == OP_TAN || op == OP_SQRT || op == OP_LOG || op == OP_EXP || op == OP_ABS || op == OP_FLOOR || op == OP_CEIL || op == OP_ROUND || op == OP_CBRT || op == OP_ASIN || op == OP_ACOS || op == OP_ATAN || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC) consumes = 1;
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || op == OP_SIN || op == OP_COS || op == OP_TAN || op == OP_SQRT || op == OP_LOG || op == OP_EXP || op == OP_ABS || op == OP_FLOOR || op == OP_CEIL || op == OP_ROUND || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC) consumes = 1;
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
@@ -173,7 +173,8 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 int base_len = val_start - base_start;
                 int idx_len = base_start - idx_start;
                 
-                Instruction temp[512];
+                // HEAP ALLOCATION: Prevent Stack Overflow
+                Instruction* temp = new Instruction[512];
                 memcpy(temp, &program_bank[target][idx_start], (idx_len + base_len + val_len) * sizeof(Instruction));
                 
                 int ptr = idx_start;
@@ -181,6 +182,7 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 memcpy(&program_bank[target][ptr], &temp[0], idx_len * sizeof(Instruction)); ptr += idx_len;
                 memcpy(&program_bank[target][ptr], &temp[idx_len], base_len * sizeof(Instruction)); ptr += base_len;
                 
+                delete[] temp;
                 program_bank[target][len++] = {OP_STORE_AT, 0}; 
                 ot--;
             }
@@ -207,7 +209,6 @@ bool compileRPN(String input) {
     clear_global_array(); 
     var_count = 0; memset(vars, 0, sizeof(vars)); 
     
-    // PERFECTLY SYNCED CONSTANT DICTIONARY
     vars[getVarId("PI")] = {0, setF(M_PI)};
     vars[getVarId("pi")] = {0, setF(M_PI)};
     vars[getVarId("TAU")] = {0, setF(M_PI * 2.0)};
@@ -232,7 +233,10 @@ bool compileRPN(String input) {
     int rpn_func_arity[64]; for (int i = 0; i < 64; i++) rpn_func_arity[i] = -1;
     int block_arity_stack[32]; int bas_ptr = -1; int last_completed_arity = 0;
     
-    String tokens[512]; int tok_cnt = tokenize(input, tokens, 512);
+    // HEAP ALLOCATION: Prevent Stack Overflow
+    std::vector<String> tokens(512); 
+    int tok_cnt = tokenize(input, tokens.data(), 512);
+    
     int block_starts[32]; int bs_ptr = -1;
     int block_params[32][8]; int bp_counts[32]; int bp_ptr = -1;
     int current_params[8]; int cp_cnt = 0;
@@ -522,12 +526,14 @@ bool compileInfix(String input, bool reset_t) {
                                 int expr_len = args_start - expr_start;
                                 int args_len = len - args_start;
                                 
-                                Instruction temp[512];
+                                // HEAP ALLOCATION: Prevent Stack Overflow
+                                Instruction* temp = new Instruction[512];
                                 memcpy(temp, &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
                                 
                                 int ptr = expr_start;
                                 memcpy(&program_bank[target][ptr], &temp[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
                                 memcpy(&program_bank[target][ptr], &temp[0], expr_len * sizeof(Instruction));
+                                delete[] temp;
                             }
                             program_bank[target][len++] = {OP_DYN_CALL, args}; 
                         }
@@ -567,13 +573,15 @@ bool compileInfix(String input, bool reset_t) {
                 int idx_len = len - idx_start;
                 int base_len = idx_start - base_start;
                 
-                Instruction temp[512];
+                // HEAP ALLOCATION: Prevent Stack Overflow
+                Instruction* temp = new Instruction[512];
                 memcpy(temp, &program_bank[target][base_start], (base_len + idx_len) * sizeof(Instruction));
                 
                 int ptr = base_start;
                 memcpy(&program_bank[target][ptr], &temp[base_len], idx_len * sizeof(Instruction)); ptr += idx_len;
                 memcpy(&program_bank[target][ptr], &temp[0], base_len * sizeof(Instruction));
                 
+                delete[] temp;
                 program_bank[target][len++] = {OP_AT, 0}; expect_op = true;
             }
             paren_depth--; p++;

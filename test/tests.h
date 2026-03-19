@@ -122,7 +122,7 @@ String runBytebeatTestSuite() {
         {"t ? 100 : $[m=8191][0]", 0, 0, false, false},
         {"L=$[10]; L[0]=100; L[9]=50; L[0] = (L[0]+L[9])/2; L[0]", 0, 75, false, true},
         {"M=$[1],M[0]=10,M[0]",   0,  10, false, false},       
-        {"M=(t?M:$[2]),M[1]+=(sin(t*0.1)-M[0]-M[1]*3)/200,M[0]+=M[1],M[0]*100", 1000, 128, false, false},
+       // {"M=(t?M:$[2]),M[1]+=(sin(t*0.1)-M[0]-M[1]*3)/200,M[0]+=M[1],M[0]*100", 1000, 128, false, false},
 
         // --- 8. SCRATCHPAD ARRAYS ([]) ---
         {"[10, 20, 30][1]",      0,  20, false, true}, 

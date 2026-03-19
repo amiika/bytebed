@@ -181,7 +181,7 @@ String decompileRPN() {
 String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     String out = "";
     
-    String stack[256];
+    std::vector<String> stack(256);
     int prec_stack[256];
     int sp = -1;
     
