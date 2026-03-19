@@ -17,10 +17,12 @@ Woop woop. It beeps! Now with functions!
 + Global variables
 + Custom function support
 + Variable chaining and array support
++ Some sort of floatbeat support
++ fn + s: Change samplerate
++ fn + f: Toggle bytebeat / floatbeat
 
 # TODO
 
-- Floating point & Floatbeat support?
 - Documentation huh? Maybe just few words about the new function and rpn syntax.
 
 # Development
@@ -29,9 +31,9 @@ Woop woop. It beeps! Now with functions!
 
 To compile to wasm and wasm binary header file, run this in wasm folder:
 
-emcc ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cpp wasm_wrapper.cpp -I. -I../include -I../src -s EXPORTED_FUNCTIONS="['_get_input_buffer', '_wasm_compile', '_wasm_execute']" -s EXPORTED_RUNTIME_METHODS="['UTF8ToString']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o bytebed.wasm
+emcc ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cpp wasm_wrapper.cpp -I. -I../include -I../src -s EXPORTED_FUNCTIONS="['_main', '_get_input_buffer', '_wasm_compile', '_wasm_execute', '_wasm_decompile', '_wasm_set_sample_rate', '_wasm_set_play_mode']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o bytebed.wasm
 
-xxd -i bytebed.wasm > ../include/wasm_binary.h
+xxd -i bytebed.wasm | sed 's/unsigned char/const unsigned char/g' > ../include/wasm_binary.h
 
 ## TESTS
 

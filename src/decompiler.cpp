@@ -342,7 +342,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                 }
             }
         }
-        else if (inst.op >= OP_SIN && inst.op <= OP_ROUND && sp >= 0) { 
+        else if (inst.op >= OP_SIN && inst.op <= OP_ATAN && sp >= 0) { 
              String val = stack[sp--]; 
              String sym = getOpSym(inst.op);
              if (sp < 255) { stack[++sp] = sym + "(" + val + ")"; prec_stack[sp] = 10; }

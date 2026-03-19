@@ -1,6 +1,45 @@
 #include "vm.h"
 #include <math.h>
-#include <constants.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+#ifndef M_PI_2
+#define M_PI_2 1.57079632679489661923
+#endif
+#ifndef M_PI_4
+#define M_PI_4 0.785398163397448309616
+#endif
+#ifndef M_1_PI
+#define M_1_PI 0.318309886183790671538
+#endif
+#ifndef M_2_PI
+#define M_2_PI 0.636619772367581343076
+#endif
+#ifndef M_2_SQRTPI
+#define M_2_SQRTPI 1.12837916709551257390
+#endif
+#ifndef M_E
+#define M_E 2.71828182845904523536
+#endif
+#ifndef M_LOG2E
+#define M_LOG2E 1.44269504088896340736
+#endif
+#ifndef M_LOG10E
+#define M_LOG10E 0.434294481903251827651
+#endif
+#ifndef M_LN2
+#define M_LN2 0.693147180559945309417
+#endif
+#ifndef M_LN10
+#define M_LN10 2.30258509299404568402
+#endif
+#ifndef M_SQRT2
+#define M_SQRT2 1.41421356237309504880
+#endif
+#ifndef M_SQRT1_2
+#define M_SQRT1_2 0.707106781186547524401
+#endif
 
 struct LambdaCtx {
     int depth;
@@ -105,7 +144,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
             if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || op == OP_SIN || op == OP_COS || op == OP_TAN || op == OP_SQRT || op == OP_LOG || op == OP_EXP || op == OP_ABS || op == OP_FLOOR || op == OP_CEIL || op == OP_ROUND || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC) consumes = 1;
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || op == OP_SIN || op == OP_COS || op == OP_TAN || op == OP_SQRT || op == OP_LOG || op == OP_EXP || op == OP_ABS || op == OP_FLOOR || op == OP_CEIL || op == OP_ROUND || op == OP_CBRT || op == OP_ASIN || op == OP_ACOS || op == OP_ATAN || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC) consumes = 1;
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
@@ -334,7 +373,6 @@ bool compileInfix(String input, bool reset_t) {
     clear_global_array();
     var_count = 0; memset(vars, 0, sizeof(vars)); 
     
-    // PERFECTLY SYNCED CONSTANT DICTIONARY
     vars[getVarId("PI")] = {0, setF(M_PI)};
     vars[getVarId("pi")] = {0, setF(M_PI)};
     vars[getVarId("TAU")] = {0, setF(M_PI * 2.0)};

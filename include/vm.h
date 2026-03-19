@@ -34,13 +34,12 @@ extern volatile uint8_t active_bank;
 extern Val vars[64];
 extern int var_count;
 
-// PSRAM Memory Management
 extern float* global_array_mem;
 extern int32_t global_array_capacity;
 void clear_global_array();
 void ensure_global_array(int32_t req_size);
 
-extern const MathFunc mathLibrary[13];
+extern const MathFunc mathLibrary[17];
 extern const int mathLibrarySize;
 extern const OpInfo opList[37]; 
 extern const int opListSize;

@@ -7,7 +7,7 @@
 #include "../test/tests.h" 
 
 const bool TEST_PRESETS = false; 
-const bool REWRITE_PRESETS = false; 
+const bool REWRITE_PRESETS = false;  
 
 void playBytebeat(void *pvParameters) {
     int16_t local_mono_buf[AUDIO_BUF_SIZE];
@@ -48,7 +48,7 @@ void setup() {
     WiFi.mode(WIFI_STA);
     WiFi.disconnect(); 
     
-    runTests(canvas);
+   // runTests(canvas);
 
     M5.Speaker.begin(); 
     M5.Speaker.setVolume(getLogVolume());
