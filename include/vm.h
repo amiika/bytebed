@@ -46,14 +46,19 @@ void init_vm_math();
 float fast_sin(float x);
 float fast_pow(float a, float b);
 
-extern const MathFunc mathLibrary[17];
+extern const MathFunc mathLibrary[19];
 extern const int mathLibrarySize;
+
+extern const MathFunc shorthands[5];
+extern const int shorthandsSize;
+
 extern const OpInfo opList[37]; 
 extern const int opListSize;
 
 bool getOpCode(const String& sym, OpCode& outCode);
 int getVarId(String name);
 String getVarName(int id);
+bool isVarDefined(const String& name);
 int getPrecedence(OpCode op);
 String getOpSym(OpCode op);
 bool compileRPN(String input);

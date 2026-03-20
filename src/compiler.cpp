@@ -142,9 +142,10 @@ static int get_expr_start(uint8_t target, int end_pc) {
             
             int consumes = 0;
             if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT) consumes = 2;
-            else if (op == OP_STORE_AT || op == OP_COND) consumes = 3;
+            else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || op == OP_SIN || op == OP_COS || op == OP_TAN || op == OP_SQRT || op == OP_LOG || op == OP_EXP || op == OP_ABS || op == OP_FLOOR || op == OP_CEIL || op == OP_ROUND || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC) consumes = 1;
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT) consumes = 1;
+            else if (op == OP_RAND) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
@@ -161,8 +162,18 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
         if (stopAtMarker && os[ot] == OP_STORE) break;
         if (os[ot] == OP_DYN_CALL) break; 
         if (minPrec != -1 && getPrecedence(os[ot]) < minPrec) break;
+        
         if (len < 512) {
-            if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, os_id[ot--]}; }
+            if (os[ot] == OP_COLON || os[ot] == OP_COND) {
+                if (cs_ptr >= 0) {
+                    program_bank[target][len++] = {OP_RET, 0};
+                    int start = cond_starts[cs_ptr--];
+                    program_bank[target][start].val = len - start; 
+                }
+                program_bank[target][len++] = {OP_COND, 0}; 
+                ot--;
+            }
+            else if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, os_id[ot--]}; }
             else if (os[ot] == OP_STORE) { program_bank[target][len++] = {OP_STORE, os_id[ot--]}; }
             else if (os[ot] == OP_STORE_AT) {
                 int val_start = get_expr_start(target, len - 1);
@@ -173,7 +184,6 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 int base_len = val_start - base_start;
                 int idx_len = base_start - idx_start;
                 
-                // HEAP ALLOCATION: Prevent Stack Overflow
                 Instruction* temp = new Instruction[512];
                 memcpy(temp, &program_bank[target][idx_start], (idx_len + base_len + val_len) * sizeof(Instruction));
                 
@@ -186,14 +196,6 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 program_bank[target][len++] = {OP_STORE_AT, 0}; 
                 ot--;
             }
-            else if (os[ot] == OP_COND) {
-                if (cs_ptr >= 0) {
-                    program_bank[target][len++] = {OP_RET, 0};
-                    int start = cond_starts[cs_ptr--];
-                    program_bank[target][start].val = len - start; 
-                }
-                program_bank[target][len++] = {OP_COND, 0}; ot--;
-            }
             else if (os[ot] == OP_SC_AND || os[ot] == OP_SC_OR) {
                 int start = os_id[ot];
                 program_bank[target][start].val = len - start; 
@@ -205,10 +207,29 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
     }
 }
 
+static bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp) {
+    int load_idx = -1;
+    for (int k = len - 1; k >= 0 && k >= len - 10; k--) {
+        if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
+    }
+    if (load_idx != -1) {
+        int var_id = program_bank[target][load_idx].val;
+        for (int k = load_idx; k < len - 1; k++) {
+            program_bank[target][k] = program_bank[target][k+1];
+        }
+        len--; 
+        os[++ot] = assignOp; 
+        os_id[ot] = var_id; 
+        return true;
+    }
+    return false;
+}
+
 bool compileRPN(String input) {
     clear_global_array(); 
     var_count = 0; memset(vars, 0, sizeof(vars)); 
     
+    vars[getVarId("t")] = {0, 0}; 
     vars[getVarId("PI")] = {0, setF(M_PI)};
     vars[getVarId("pi")] = {0, setF(M_PI)};
     vars[getVarId("TAU")] = {0, setF(M_PI * 2.0)};
@@ -233,7 +254,6 @@ bool compileRPN(String input) {
     int rpn_func_arity[64]; for (int i = 0; i < 64; i++) rpn_func_arity[i] = -1;
     int block_arity_stack[32]; int bas_ptr = -1; int last_completed_arity = 0;
     
-    // HEAP ALLOCATION: Prevent Stack Overflow
     std::vector<String> tokens(512); 
     int tok_cnt = tokenize(input, tokens.data(), 512);
     
@@ -332,7 +352,11 @@ bool compileRPN(String input) {
         else if (s.startsWith("'") && s.endsWith("'")) {
             int count = 0;
             for (size_t k = 1; k < s.length() - 1; k++) {
-                float val = (s[k] >= '0' && s[k] <= '9') ? (s[k] - '0') : s[k];
+                char c = s[k]; float val;
+                if (c >= '0' && c <= '9') val = c - '0';
+                else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'Z') val = c - 'A' + 10;
+                else val = c;
                 program_bank[target][len++] = {OP_VAL, setF(val)}; count++;
             }
             program_bank[target][len++] = {OP_VAL, setF(count)}; program_bank[target][len++] = {OP_VEC, 0}; 
@@ -342,7 +366,6 @@ bool compileRPN(String input) {
             if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1])) || (s.startsWith("-.") && s.length() > 2 && isdigit(s[2]))) {
                 program_bank[target][len++] = {OP_VAL, setF(strtof(s.c_str(), NULL))};
             }
-            else if (s == "t") program_bank[target][len++] = {OP_T, 0};
             else if (s == ";") program_bank[target][len++] = {OP_POP, 0}; 
             else if (s == "?") program_bank[target][len++] = {OP_COND, 0};
             else if (s.startsWith("call")) {
@@ -355,6 +378,22 @@ bool compileRPN(String input) {
                 for (int _m = 0; _m < mathLibrarySize; _m++) {
                     if (s == mathLibrary[_m].name) { program_bank[target][len++] = {mathLibrary[_m].code, 0}; is_math = true; break; }
                 }
+                
+                if (!is_math && !isVarDefined(s)) {
+                    bool next_is_assign = false;
+                    if (i + 1 < tok_cnt) {
+                        String nxt = tokens[i+1];
+                        if (nxt == "=" || nxt == ":=" || nxt == "+=" || nxt == "-=" || nxt == "*=" || nxt == "/=" || nxt == "%=" || nxt == "&=" || nxt == "|=" || nxt == "^=" || nxt == "<<=" || nxt == ">>=" || nxt == "**=") {
+                            next_is_assign = true;
+                        }
+                    }
+                    if (!next_is_assign) {
+                        for (int _s = 0; _s < shorthandsSize; _s++) {
+                            if (s == shorthands[_s].name) { program_bank[target][len++] = {shorthands[_s].code, 0}; is_math = true; break; }
+                        }
+                    }
+                }
+                
                 OpCode opc;
                 if (!is_math) { 
                     if (getOpCode(s, opc)) { program_bank[target][len++] = {opc, 0}; is_math = true; } 
@@ -377,6 +416,7 @@ bool compileInfix(String input, bool reset_t) {
     clear_global_array();
     var_count = 0; memset(vars, 0, sizeof(vars)); 
     
+    vars[getVarId("t")] = {0, 0}; 
     vars[getVarId("PI")] = {0, setF(M_PI)};
     vars[getVarId("pi")] = {0, setF(M_PI)};
     vars[getVarId("TAU")] = {0, setF(M_PI * 2.0)};
@@ -437,12 +477,22 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (isalpha(*p)) { 
             String word = ""; while (isalpha(*p) || isdigit(*p) || *p == '_') word += *p++; 
-            if (word == "t") { if (expect_op) return false; expect_op = true; program_bank[target][len++] = {OP_T, 0}; continue; }
             if (word == "return") { expect_op = false; continue; } 
             
             bool is_math = false;
             for (int _m = 0; _m < mathLibrarySize; _m++) { 
                 if (word == mathLibrary[_m].name) { if (expect_op) return false; expect_op = false; os[++ot] = mathLibrary[_m].code; os_id[ot] = 0; is_math = true; break; } 
+            }
+            if (!is_math && !isVarDefined(word)) {
+                const char* temp2 = p;
+                while (isspace(*temp2)) temp2++;
+                if (*temp2 == '(') {
+                    for (int _s = 0; _s < shorthandsSize; _s++) {
+                        if (word == shorthands[_s].name) {
+                            if (expect_op) return false; expect_op = false; os[++ot] = shorthands[_s].code; os_id[ot] = 0; is_math = true; break;
+                        }
+                    }
+                }
             }
             if (is_math) continue; 
             
@@ -470,7 +520,14 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == '\'') {
             if (expect_op) return false; p++; int count = 0;
-            while (*p && *p != '\'') { float val = (*p >= '0' && *p <= '9') ? (*p - '0') : *p; program_bank[target][len++] = {OP_VAL, setF(val)}; count++; p++; }
+            while (*p && *p != '\'') { 
+                char c = *p; float val;
+                if (c >= '0' && c <= '9') val = c - '0';
+                else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
+                else if (c >= 'A' && c <= 'Z') val = c - 'A' + 10;
+                else val = c;
+                program_bank[target][len++] = {OP_VAL, setF(val)}; count++; p++; 
+            }
             if (*p == '\'') p++;
             program_bank[target][len++] = {OP_VAL, setF(count)}; program_bank[target][len++] = {OP_VEC, 1}; 
             expect_op = true;
@@ -526,7 +583,6 @@ bool compileInfix(String input, bool reset_t) {
                                 int expr_len = args_start - expr_start;
                                 int args_len = len - args_start;
                                 
-                                // HEAP ALLOCATION: Prevent Stack Overflow
                                 Instruction* temp = new Instruction[512];
                                 memcpy(temp, &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
                                 
@@ -539,7 +595,7 @@ bool compileInfix(String input, bool reset_t) {
                         }
                         ot--; 
                     } 
-                    else if (os[ot] >= OP_SIN && os[ot] <= OP_POW) { program_bank[target][len++] = {os[ot--], 0}; }
+                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_RAND) { program_bank[target][len++] = {os[ot--], 0}; }
                 }
             }
             paren_depth--; p++; expect_op = true; 
@@ -573,7 +629,6 @@ bool compileInfix(String input, bool reset_t) {
                 int idx_len = len - idx_start;
                 int base_len = idx_start - base_start;
                 
-                // HEAP ALLOCATION: Prevent Stack Overflow
                 Instruction* temp = new Instruction[512];
                 memcpy(temp, &program_bank[target][base_start], (base_len + idx_len) * sizeof(Instruction));
                 
@@ -611,11 +666,20 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == ':') { 
             if (!expect_op) return false; expect_op = false; if (cond_depth <= 0) return false; 
+            
             flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_COND, -1, true); 
-            program_bank[target][len++] = {OP_RET, 0}; if (cs_ptr < 0) return false;
+            
+            if (ot < 0 || os[ot] != OP_COND) return false;
+            os[ot] = OP_COLON;
+            
+            program_bank[target][len++] = {OP_RET, 0}; 
+            if (cs_ptr < 0) return false;
             int start = cond_starts[cs_ptr--];
             program_bank[target][start].val = len - start; 
-            program_bank[target][len++] = {OP_PUSH_FUNC, 0}; if (cs_ptr < 127) cond_starts[++cs_ptr] = len - 1; 
+            
+            program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
+            if (cs_ptr < 127) cond_starts[++cs_ptr] = len - 1; 
+            
             cond_depth--; p++; 
         }
         else if (*p == ';') { expect_op = false; flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); program_bank[target][len++] = {OP_POP, 0}; p++; }
@@ -623,7 +687,7 @@ bool compileInfix(String input, bool reset_t) {
             if (!expect_op) return false; expect_op = false; 
             flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
             
-            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW)));
+            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT));
             bool is_array = (bt_ptr >= 0 && bracket_types[bt_ptr] == 1);
             if (is_func_call) call_arg_counts[cac_ptr]++; 
             else if (is_array) array_counts[ac_ptr]++; 
@@ -633,117 +697,23 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == '=' && *(p+1) != '=' && *(p+1) != '>') {
             if (len > 0 && program_bank[target][len - 1].op == OP_AT) {
-                len--; 
-                os[++ot] = OP_STORE_AT; os_id[ot] = 0; p++; expect_op = false;
+                len--; os[++ot] = OP_STORE_AT; os_id[ot] = 0; p++; expect_op = false;
             } else {
-                int load_idx = -1;
-                for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-                if (load_idx != -1) {
-                    int var_id = program_bank[target][load_idx].val;
-                    for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                    len--; os[++ot] = OP_ASSIGN_VAR; os_id[ot] = var_id; p++; expect_op = false;
-                } else return false;
+                if (!applyCompoundAssign(target, len, os, os_id, ot, OP_ASSIGN_VAR)) return false;
+                p++; expect_op = false;
             }
         }
-        else if (*p == '+' && *(p+1) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_ADD_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '-' && *(p+1) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_SUB_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '*' && *(p+1) == '*' && *(p+2) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_POW_ASSIGN; os_id[ot] = var_id; p += 3; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '*' && *(p+1) == '=' && *(p+2) != '*') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_MUL_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '/' && *(p+1) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_DIV_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '%' && *(p+1) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_MOD_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '&' && *(p+1) == '=' && *(p+2) != '&') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_AND_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '|' && *(p+1) == '=' && *(p+2) != '|') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_OR_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '^' && *(p+1) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_XOR_ASSIGN; os_id[ot] = var_id; p += 2; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '<' && *(p+1) == '<' && *(p+2) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_SHL_ASSIGN; os_id[ot] = var_id; p += 3; expect_op = false;
-            } else return false;
-        }
-        else if (*p == '>' && *(p+1) == '>' && *(p+2) == '=') {
-            int load_idx = -1;
-            for (int k = len - 1; k >= 0 && k >= len - 10; k--) if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
-            if (load_idx != -1) {
-                int var_id = program_bank[target][load_idx].val;
-                for (int k = load_idx; k < len - 1; k++) program_bank[target][k] = program_bank[target][k+1];
-                len--; os[++ot] = OP_SHR_ASSIGN; os_id[ot] = var_id; p += 3; expect_op = false;
-            } else return false;
-        }
+        else if (*p == '+' && *(p+1) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_ADD_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '-' && *(p+1) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_SUB_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '*' && *(p+1) == '*' && *(p+2) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_POW_ASSIGN)) return false; p += 3; expect_op = false; }
+        else if (*p == '*' && *(p+1) == '=' && *(p+2) != '*') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_MUL_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '/' && *(p+1) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_DIV_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '%' && *(p+1) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_MOD_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '&' && *(p+1) == '=' && *(p+2) != '&') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_AND_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '|' && *(p+1) == '=' && *(p+2) != '|') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_OR_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '^' && *(p+1) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_XOR_ASSIGN)) return false; p += 2; expect_op = false; }
+        else if (*p == '<' && *(p+1) == '<' && *(p+2) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_SHL_ASSIGN)) return false; p += 3; expect_op = false; }
+        else if (*p == '>' && *(p+1) == '>' && *(p+2) == '=') { if (!applyCompoundAssign(target, len, os, os_id, ot, OP_SHR_ASSIGN)) return false; p += 3; expect_op = false; }
         else {
             String opStr = ""; opStr += *p;
             if (*(p+1) && *(p+2) && strchr("=<>!&|*", *(p+1)) && *(p+2) == '=') { String test3 = opStr + *(p+1) + *(p+2); OpCode dummy; if (getOpCode(test3, dummy)) opStr = test3; }

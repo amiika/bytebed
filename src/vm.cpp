@@ -54,7 +54,7 @@ inline float sanitize(float f) {
     return f;
 }
 
-// --- Metadata Tables ---
+// Opcodes
 const MathFunc mathLibrary[] = {
     {"sin",   OP_SIN,   true},  {"cos",   OP_COS,   true},  {"tan",   OP_TAN,   true},
     {"sqrt",  OP_SQRT,  true},  {"log",   OP_LOG,   true},  {"exp",   OP_EXP,   true},
@@ -62,8 +62,18 @@ const MathFunc mathLibrary[] = {
     {"round", OP_ROUND, true},  {"cbrt",  OP_CBRT,  true},  {"asin",  OP_ASIN,  true},
     {"acos",  OP_ACOS,  true},  {"atan",  OP_ATAN,  true},
     {"min",   OP_MIN,   false}, {"max",   OP_MAX,   false}, {"pow",   OP_POW,   false},
+    {"random", OP_RAND, true},  {"int",   OP_INT,   true}
 };
-const int mathLibrarySize = 17;
+const int mathLibrarySize = 19;
+
+const MathFunc shorthands[] = {
+    {"s", OP_SIN, true},
+    {"c", OP_COS, true},
+    {"f", OP_FLOOR, true},
+    {"i", OP_INT, true},
+    {"r", OP_RAND, true}
+};
+const int shorthandsSize = 5;
 
 const OpInfo opList[] = {
     {"+",  OP_ADD, 7}, {"-",  OP_SUB, 7}, {"*",  OP_MUL, 8},
@@ -84,7 +94,7 @@ const OpInfo opList[] = {
 };
 const int opListSize = 37;
 
-// --- LINKER SYMBOLS: Helper Functions for Compiler/Decompiler ---
+// Helpers
 int getVarId(String name) {
     for (int i = 0; i < var_count; i++) {
         if (symNames[i] == name) return i;
@@ -99,11 +109,18 @@ String getVarName(int id) {
     return "v" + String(id);
 }
 
+bool isVarDefined(const String& name) {
+    for (int i = 0; i < var_count; i++) {
+        if (symNames[i] == name) return true;
+    }
+    return false;
+}
+
 int getPrecedence(OpCode op) {
     for (int i = 0; i < opListSize; i++) {
         if (opList[i].code == op) return opList[i].precedence;
     }
-    if (op == OP_COND) return 0;
+    if (op == OP_COND || op == OP_COLON) return 0;
     if (op == OP_ASSIGN_VAR || op == OP_STORE_AT || (op >= OP_ADD_ASSIGN && op <= OP_SHR_ASSIGN)) return -1;
     if (op == OP_STORE || op == OP_STORE_KEEP) return -2;
     if (op == OP_NONE || op == OP_DYN_CALL || op == OP_DYN_CALL_IF_FUNC) return -3;
@@ -113,6 +130,7 @@ int getPrecedence(OpCode op) {
 String getOpSym(OpCode op) {
     if (op == OP_COND) return "?"; 
     if (op == OP_BNOT) return "~";
+    for (int i = 0; i < shorthandsSize; i++) if (shorthands[i].code == op) return shorthands[i].name; 
     for (int i = 0; i < mathLibrarySize; i++) if (mathLibrary[i].code == op) return mathLibrary[i].name; 
     for (int i = 0; i < opListSize; i++) if (opList[i].code == op) return opList[i].sym; 
     return "";
@@ -128,7 +146,7 @@ bool getOpCode(const String& sym, OpCode& outCode) {
     return false;
 }
 
-// --- THE CORE DISPATCH ENGINE ---
+// --- VM Execution ---
 void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     uint8_t bank = active_bank; 
     int len = prog_len_bank[bank];
@@ -153,13 +171,18 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         &&L_OP_ALLOC, &&L_OP_VEC, &&L_OP_AT, &&L_OP_STORE_AT, 
         &&L_OP_SC_AND, &&L_OP_SC_OR, &&L_DEFAULT,
         &&L_OP_ADD_ASSIGN, &&L_OP_SUB_ASSIGN, &&L_OP_MUL_ASSIGN, &&L_OP_DIV_ASSIGN, &&L_OP_MOD_ASSIGN,
-        &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN
+        &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN,
+        &&L_OP_RAND, &&L_OP_INT
     };
 
     Instruction* prog = program_bank[bank];
+    int t_var_id = getVarId("t");
 
     for (int sample_idx = 0; sample_idx < length; sample_idx++) {
-        int32_t t = start_t + sample_idx;
+        vars[t_var_id].type = 0;
+        vars[t_var_id].f = (float)(start_t + sample_idx); 
+
+        int32_t t = start_t + sample_idx; // Backwards compatibility for OP_T
         local_array_ptr = 0; 
         int sp = -1; int csp = -1; int ssp = -1;
         Val tos = {0, 0}; 
@@ -168,24 +191,24 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         Instruction inst = prog[pc];
         goto *dispatch_table[inst.op];
 
-        #define BEEP() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[inst.op]; } while(0)
+        #define BOING() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[inst.op]; } while(0)
 
-        L_OP_VAL: stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BEEP();
-        L_OP_T:   stack[++sp] = tos; tos.type = 0; tos.f = (float)t; BEEP();
-        L_OP_LOAD: stack[++sp] = tos; tos = vars[inst.val]; BEEP();
-        L_OP_STORE: vars[inst.val] = tos; tos = stack[sp--]; BEEP();
-        L_OP_STORE_KEEP: vars[inst.val] = tos; BEEP();
-        L_OP_POP: tos = stack[sp--]; BEEP();
-        L_OP_JMP: pc += inst.val - 1; BEEP(); 
-        L_OP_PUSH_FUNC: stack[++sp] = tos; tos.type = 1; tos.v = pc + 1; pc += inst.val - 1; BEEP(); 
-        L_OP_ASSIGN_VAR: BEEP();
+        L_OP_VAL: stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BOING();
+        L_OP_T:   stack[++sp] = tos; tos.type = 0; tos.f = (float)t; BOING();
+        L_OP_LOAD: stack[++sp] = tos; tos = vars[inst.val]; BOING();
+        L_OP_STORE: vars[inst.val] = tos; tos = stack[sp--]; BOING();
+        L_OP_STORE_KEEP: vars[inst.val] = tos; BOING();
+        L_OP_POP: tos = stack[sp--]; BOING();
+        L_OP_JMP: pc += inst.val - 1; BOING(); 
+        L_OP_PUSH_FUNC: stack[++sp] = tos; tos.type = 1; tos.v = pc + 1; pc += inst.val - 1; BOING(); 
+        L_OP_ASSIGN_VAR: BOING();
         L_OP_DYN_CALL:
         L_OP_DYN_CALL_IF_FUNC:
             if (tos.type == 1) { if (csp < 511) { call_stack[++csp] = pc; pc = tos.v - 1; } tos = stack[sp--]; } 
-            else if (inst.op == OP_DYN_CALL) { int args = inst.val; sp -= args; tos = {0, 0}; } BEEP();
-        L_OP_RET: if (csp >= 0) pc = call_stack[csp--]; else pc = len; BEEP();
-        L_OP_BIND: if (ssp < 511) shadow_val[++ssp] = vars[inst.val]; vars[inst.val] = tos; tos = stack[sp--]; BEEP();
-        L_OP_UNBIND: if (ssp >= 0) vars[inst.val] = shadow_val[ssp--]; BEEP();
+            else if (inst.op == OP_DYN_CALL) { int args = inst.val; sp -= args; tos = {0, 0}; } BOING();
+        L_OP_RET: if (csp >= 0) pc = call_stack[csp--]; else pc = len; BOING();
+        L_OP_BIND: if (ssp < 511) shadow_val[++ssp] = vars[inst.val]; vars[inst.val] = tos; tos = stack[sp--]; BOING();
+        L_OP_UNBIND: if (ssp >= 0) vars[inst.val] = shadow_val[ssp--]; BOING();
         L_OP_VEC: {
             int32_t size = (int32_t)tos.f;
             if (size >= 1) {
@@ -198,12 +221,12 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                     }
                 }
                 sp -= size; tos.type = 2; tos.v = (offset << 16) | (size & 0xFFFF); 
-            } BEEP();
+            } BOING();
         }
         L_OP_ALLOC: {
             int32_t size = (int32_t)tos.f;
             if (size > 0) ensure_global_array(size); 
-            tos.type = 3; tos.f = (float)(global_array_capacity > 0 ? global_array_capacity : size); BEEP();
+            tos.type = 3; tos.f = (float)(global_array_capacity > 0 ? global_array_capacity : size); BOING();
         }
         L_OP_AT: {
             Val base = tos; int32_t idx = (int32_t)stack[sp--].f;
@@ -216,7 +239,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             } else if (base.type == 3 && global_array_capacity > 0) { 
                 if (idx < 0 || idx >= global_array_capacity) idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity; 
                 tos.type = 0; tos.f = sanitize(global_array_mem[idx]);
-            } else { tos = {0, 0}; } BEEP();
+            } else { tos = {0, 0}; } BOING();
         }
         L_OP_STORE_AT: {
             Val base = tos; int32_t idx = (int32_t)stack[sp--].f; Val val_to_s = stack[sp--];
@@ -228,66 +251,79 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                 if (idx < 0 || idx >= global_array_capacity) idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity;
                 global_array_mem[idx] = sanitize(val_to_s.f); 
             }
-            tos = val_to_s; BEEP();
+            tos = val_to_s; BOING();
         }
-        L_OP_SC_AND: { if (inst.val != 0) { if (tos.f == 0.0f) pc += inst.val - 1; else tos = stack[sp--]; } else { if (stack[sp].f == 0.0f) tos = stack[sp--]; else sp--; } BEEP(); }
-        L_OP_SC_OR: { if (inst.val != 0) { if (tos.f != 0.0f) pc += inst.val - 1; else tos = stack[sp--]; } else { if (stack[sp].f != 0.0f) tos = stack[sp--]; else sp--; } BEEP(); }
-        L_OP_NEG: tos.f = -tos.f; BEEP();
-        L_OP_NOT: tos.f = (tos.f == 0.0f) ? 1.0f : 0.0f; BEEP();
-        L_OP_BNOT: tos.f = (float)(~(int32_t)tos.f); BEEP();
+        L_OP_SC_AND: { if (inst.val != 0) { if (tos.f == 0.0f) pc += inst.val - 1; else tos = stack[sp--]; } else { if (stack[sp].f == 0.0f) tos = stack[sp--]; else sp--; } BOING(); }
+        L_OP_SC_OR: { if (inst.val != 0) { if (tos.f != 0.0f) pc += inst.val - 1; else tos = stack[sp--]; } else { if (stack[sp].f != 0.0f) tos = stack[sp--]; else sp--; } BOING(); }
+        L_OP_NEG: tos.f = -tos.f; BOING();
+        L_OP_NOT: tos.f = (tos.f == 0.0f) ? 1.0f : 0.0f; BOING();
+        L_OP_BNOT: tos.f = (float)(~(int32_t)tos.f); BOING();
         
-        L_OP_SIN: { tos.f = is_bb ? 128.0f + fast_sin(tos.f * 0.02454369f) * 127.0f : fast_sin(tos.f); BEEP(); }
-        L_OP_COS: { tos.f = is_bb ? 128.0f + fast_sin(tos.f * 0.02454369f + 1.570796f) * 127.0f : fast_sin(tos.f + 1.570796f); BEEP(); }
-        L_OP_TAN: { tos.f = is_bb ? 128.0f + sanitize(tanf(tos.f * 0.02454369f)) * 127.0f : sanitize(tanf(tos.f)); BEEP(); }
+        L_OP_SIN: { tos.f = is_bb ? 128.0f + fast_sin(tos.f * 0.02454369f) * 127.0f : fast_sin(tos.f); BOING(); }
+        L_OP_COS: { tos.f = is_bb ? 128.0f + fast_sin(tos.f * 0.02454369f + 1.570796f) * 127.0f : fast_sin(tos.f + 1.570796f); BOING(); }
+        L_OP_TAN: { tos.f = is_bb ? 128.0f + sanitize(tanf(tos.f * 0.02454369f)) * 127.0f : sanitize(tanf(tos.f)); BOING(); }
         
-        L_OP_SQRT:  tos.f = sanitize(tos.f >= 0.0f ? sqrtf(tos.f) : 0.0f); BEEP();
-        L_OP_LOG:   tos.f = sanitize(tos.f > 0.0f ? logf(tos.f) : 0.0f); BEEP();
-        L_OP_EXP:   tos.f = sanitize(expf(tos.f)); BEEP();
-        L_OP_ABS:   tos.f = fabsf(tos.f); BEEP();
-        L_OP_FLOOR: tos.f = floorf(tos.f); BEEP();
-        L_OP_CEIL:  tos.f = ceilf(tos.f); BEEP();
-        L_OP_ROUND: tos.f = roundf(tos.f); BEEP();
-        L_OP_CBRT:  tos.f = sanitize(cbrtf(tos.f)); BEEP();
-        L_OP_ASIN:  tos.f = sanitize(asinf(tos.f)); BEEP();
-        L_OP_ACOS:  tos.f = sanitize(acosf(tos.f)); BEEP();
-        L_OP_ATAN:  tos.f = sanitize(atanf(tos.f)); BEEP();
-        L_OP_COND: { Val f = tos, tv = stack[sp--], c = stack[sp--]; Val tgt = (c.f != 0.0f) ? tv : f; if (tgt.type == 1) { if (csp < 511) { call_stack[++csp] = pc; pc = tgt.v - 1; } tos = stack[sp--]; } else { tos = tgt; } BEEP(); }
+        L_OP_SQRT:  tos.f = sanitize(tos.f >= 0.0f ? sqrtf(tos.f) : 0.0f); BOING();
+        L_OP_LOG:   tos.f = sanitize(tos.f > 0.0f ? logf(tos.f) : 0.0f); BOING();
+        L_OP_EXP:   tos.f = sanitize(expf(tos.f)); BOING();
+        L_OP_ABS:   tos.f = fabsf(tos.f); BOING();
+        L_OP_FLOOR: tos.f = floorf(tos.f); BOING();
+        L_OP_CEIL:  tos.f = ceilf(tos.f); BOING();
+        L_OP_ROUND: tos.f = roundf(tos.f); BOING();
+        L_OP_CBRT:  tos.f = sanitize(cbrtf(tos.f)); BOING();
+        L_OP_ASIN:  tos.f = sanitize(asinf(tos.f)); BOING();
+        L_OP_ACOS:  tos.f = sanitize(acosf(tos.f)); BOING();
+        L_OP_ATAN:  tos.f = sanitize(atanf(tos.f)); BOING();
+        L_OP_COND: { Val f = tos, tv = stack[sp--], c = stack[sp--]; Val tgt = (c.f != 0.0f) ? tv : f; if (tgt.type == 1) { if (csp < 511) { call_stack[++csp] = pc; pc = tgt.v - 1; } tos = stack[sp--]; } else { tos = tgt; } BOING(); }
         
-        L_OP_ADD: tos.f = stack[sp].f + tos.f; sp--; BEEP();
-        L_OP_SUB: tos.f = stack[sp].f - tos.f; sp--; BEEP();
-        L_OP_MUL: tos.f = stack[sp].f * tos.f; sp--; BEEP();
-        L_OP_DIV: { float d = tos.f; tos.f = (d != 0.0f ? sanitize(stack[sp].f / d) : 0.0f); sp--; BEEP(); }
-        L_OP_MOD: { float n = stack[sp].f, d = tos.f; tos.f = (d != 0.0f ? sanitize(n - (int32_t)(n / d) * d) : 0.0f); sp--; BEEP(); }
+        L_OP_ADD: tos.f = stack[sp].f + tos.f; sp--; BOING();
+        L_OP_SUB: tos.f = stack[sp].f - tos.f; sp--; BOING();
+        L_OP_MUL: tos.f = stack[sp].f * tos.f; sp--; BOING();
+        L_OP_DIV: { float d = tos.f; tos.f = (d != 0.0f ? sanitize(stack[sp].f / d) : 0.0f); sp--; BOING(); }
+        L_OP_MOD: { float n = stack[sp].f, d = tos.f; tos.f = (d != 0.0f ? sanitize(n - (int32_t)(n / d) * d) : 0.0f); sp--; BOING(); }
         
-        L_OP_AND: tos.f = (float)((int32_t)stack[sp].f & (int32_t)tos.f); sp--; BEEP();
-        L_OP_OR:  tos.f = (float)((int32_t)stack[sp].f | (int32_t)tos.f); sp--; BEEP();
-        L_OP_XOR: tos.f = (float)((int32_t)stack[sp].f ^ (int32_t)tos.f); sp--; BEEP();
-        L_OP_SHL: tos.f = (float)((int32_t)stack[sp].f << (int32_t)tos.f); sp--; BEEP();
-        L_OP_SHR: tos.f = (float)((int32_t)stack[sp].f >> (int32_t)tos.f); sp--; BEEP();
+        L_OP_AND: tos.f = (float)((int32_t)stack[sp].f & (int32_t)tos.f); sp--; BOING();
+        L_OP_OR:  tos.f = (float)((int32_t)stack[sp].f | (int32_t)tos.f); sp--; BOING();
+        L_OP_XOR: tos.f = (float)((int32_t)stack[sp].f ^ (int32_t)tos.f); sp--; BOING();
+        L_OP_SHL: tos.f = (float)((int32_t)stack[sp].f << (int32_t)tos.f); sp--; BOING();
+        L_OP_SHR: tos.f = (float)((int32_t)stack[sp].f >> (int32_t)tos.f); sp--; BOING();
         
-        L_OP_LT:  tos.f = (stack[sp].f < tos.f) ? 1.0f : 0.0f; sp--; BEEP();
-        L_OP_GT:  tos.f = (stack[sp].f > tos.f) ? 1.0f : 0.0f; sp--; BEEP();
-        L_OP_EQ:  tos.f = (stack[sp].f == tos.f) ? 1.0f : 0.0f; sp--; BEEP();
-        L_OP_NEQ: tos.f = (stack[sp].f != tos.f) ? 1.0f : 0.0f; sp--; BEEP();
-        L_OP_LTE: tos.f = (stack[sp].f <= tos.f) ? 1.0f : 0.0f; sp--; BEEP();
-        L_OP_GTE: tos.f = (stack[sp].f >= tos.f) ? 1.0f : 0.0f; sp--; BEEP();
-        L_OP_MIN: { float a = stack[sp].f, b = tos.f; tos.f = (a < b ? a : b); sp--; BEEP(); }
-        L_OP_MAX: { float a = stack[sp].f, b = tos.f; tos.f = (a > b ? a : b); sp--; BEEP(); }
-        L_OP_POW: tos.f = fast_pow(stack[sp].f, tos.f); sp--; BEEP();
+        L_OP_LT:  tos.f = (stack[sp].f < tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_GT:  tos.f = (stack[sp].f > tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_EQ:  tos.f = (stack[sp].f == tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_NEQ: tos.f = (stack[sp].f != tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_LTE: tos.f = (stack[sp].f <= tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_GTE: tos.f = (stack[sp].f >= tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_MIN: { float a = stack[sp].f, b = tos.f; tos.f = (a < b ? a : b); sp--; BOING(); }
+        L_OP_MAX: { float a = stack[sp].f, b = tos.f; tos.f = (a > b ? a : b); sp--; BOING(); }
+        L_OP_POW: tos.f = fast_pow(stack[sp].f, tos.f); sp--; BOING();
 
-        L_OP_ADD_ASSIGN: { float r = vars[inst.val].f + tos.f; tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_SUB_ASSIGN: { float r = vars[inst.val].f - tos.f; tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_MUL_ASSIGN: { float r = vars[inst.val].f * tos.f; tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_DIV_ASSIGN: { float n = vars[inst.val].f, d = tos.f; float r = (d != 0.0f ? sanitize(n / d) : 0.0f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_MOD_ASSIGN: { float n = vars[inst.val].f, d = tos.f; float r = (d != 0.0f ? sanitize(n - (int32_t)(n / d) * d) : 0.0f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_AND_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f & (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_OR_ASSIGN:  { float r = (float)((int32_t)vars[inst.val].f | (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_XOR_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f ^ (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_SHL_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f << (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_SHR_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f >> (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BEEP(); }
-        L_OP_POW_ASSIGN: { float r = fast_pow(vars[inst.val].f, tos.f); tos.f = r; vars[inst.val] = tos; BEEP(); }
+        L_OP_ADD_ASSIGN: { float r = vars[inst.val].f + tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_SUB_ASSIGN: { float r = vars[inst.val].f - tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_MUL_ASSIGN: { float r = vars[inst.val].f * tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_DIV_ASSIGN: { float n = vars[inst.val].f, d = tos.f; float r = (d != 0.0f ? sanitize(n / d) : 0.0f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_MOD_ASSIGN: { float n = vars[inst.val].f, d = tos.f; float r = (d != 0.0f ? sanitize(n - (int32_t)(n / d) * d) : 0.0f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_AND_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f & (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_OR_ASSIGN:  { float r = (float)((int32_t)vars[inst.val].f | (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_XOR_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f ^ (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_SHL_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f << (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_SHR_ASSIGN: { float r = (float)((int32_t)vars[inst.val].f >> (int32_t)tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
+        L_OP_POW_ASSIGN: { float r = fast_pow(vars[inst.val].f, tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
         
-        L_DEFAULT: BEEP();
+        L_OP_RAND: {
+            static uint32_t x_rng = 123456789;
+            x_rng ^= x_rng << 13;
+            x_rng ^= x_rng >> 17;
+            x_rng ^= x_rng << 5;
+            stack[++sp] = tos;
+            tos.type = 0;
+            tos.f = (float)(x_rng & 0xFFFFFF) / 16777216.0f;
+            BOING();
+        }
+
+        L_OP_INT: { tos.f = (float)((int32_t)tos.f); BOING(); }
+
+        L_DEFAULT: BOING();
         L_END:
         float out = 0.0f;
         if (tos.type == 2 || tos.type == 3) {
@@ -307,7 +343,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             out_buf[sample_idx] = (uint8_t)((int32_t)sanitize(out) & 255); 
         }
     }
-    #undef BEEP
+    #undef BOING
 }
 
 uint8_t IRAM_ATTR execute_vm(int32_t t) {

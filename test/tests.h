@@ -122,7 +122,6 @@ String runBytebeatTestSuite() {
         {"t ? 100 : $[m=8191][0]", 0, 0, false, false},
         {"L=$[10]; L[0]=100; L[9]=50; L[0] = (L[0]+L[9])/2; L[0]", 0, 75, false, true},
         {"M=$[1],M[0]=10,M[0]",   0,  10, false, false},       
-       // {"M=(t?M:$[2]),M[1]+=(sin(t*0.1)-M[0]-M[1]*3)/200,M[0]+=M[1],M[0]*100", 1000, 128, false, false},
 
         // --- 8. SCRATCHPAD ARRAYS ([]) ---
         {"[10, 20, 30][1]",      0,  20, false, true}, 
@@ -136,20 +135,20 @@ String runBytebeatTestSuite() {
         // --- 9. SMART STRINGS ---
         {"'1112'[3]",            0,  2, false, true}, 
         {"'5'[0]",               0,  5, false, true}, 
-        {"'abc'[0]",             0,  97, false, true}, 
+        {"'abc'[0]",             0,  10, false, true}, 
         {"' '[0]",               0,  32, false, true}, 
-        {"m = 'aa hh'; m[3]",    0, 104, false, true}, 
+        {"m = 'aa hh'; m[3]",    0, 17, false, true}, 
         {"'123'[0]",             0,   1, false, true}, 
         {"'5'[0] * 10",          0,  50, false, true}, 
-        {"'a'[0] - 97",          0,   0, false, true},
+        {"'a'[0] + 97",          0,   107, false, true},
         {"3 '1112' @",           0,  2, true,  true},
 
         // --- 10. MULTIDIMENSIONAL & NESTED (NEW) ---
-        {"[[10,20],[30,40]][1][0]", 0, 30, false, true},      // 10.1 Infix 2D Indexing
+        {"[[10,20],[30,40]][1][0]", 0, 30, false, true}, 
         {"0 1 10 20 2 _ 30 40 2 _ 2 _ @ @", 0, 30, true, true},
-        {"[[[42]]][0][0][0]", 0, 42, false, true},             // 10.3 Infix Deep Nesting
-        {"m = ['abc','def']; m[1][1]", 0, 101, false, true},  // 10.4 Matrix of strings ('e' = 101)
-        {"m = [[1,2,3], 10, [4,5]]; m[2][0]", 0, 4, false, true}, // 10.5 Mixed type nesting
+        {"[[[42]]][0][0][0]", 0, 42, false, true}, 
+        {"m = ['abc','def']; m[1][1]", 0, 14, false, true}, 
+        {"m = [[1,2,3], 10, [4,5]]; m[2][0]", 0, 4, false, true}, 
 
         // --- 11. COMPLEX FORMULAS ---
         {"p=floor(t/4000)%16;m=[2,4,5,9,2,4,5,9,0,4,5,9,0,4,5,9][p];f=(n,s)=>(t*(n+s)%256)/128-1;(f(m,40)+f(m,60)+f(m,80))/3", 100, 0, false, true},
@@ -158,6 +157,18 @@ String runBytebeatTestSuite() {
         {"a=t*2**([0,0,-2,-2,3,3,-2,3][t>>13&7]/12),b=t*2**([-5,1,2,3,3][t>>11&63]/12+2),(3*a^t>>6&256/'1112'[t>>14&3]-1|a)%256*2/3+(b^b*2)%256/3", 8192, 114, false, true},
         {"m=8191; q=1; u=0; t+5-(896>>q/4)/(q?8:1)&m^~m*q", 0, 149, false, false},
         {"L=t?L:$[m=8191],M=t/34e4,[(X=q=>q<14&&X(q+1)+(x=M*(16<<q/4)+q/4,u=x%1*8,D=e=>L[t+e-(896>>q/4)/(q?(8+[2-(M&3&M/4)%3,7,4][q%3])*(~M/2&1|8)/40:1+9/9**u)&m^~m*q]||0,L[t&m^~m*q]=D(R+=D(49*q))/2+D(m/9**M)*.45+sin(40/1e9**(u*u)*(q>2?tan(x/64%4):2))/(4+q)))(R=0),R]", 0, 118, false, false},
+
+        // --- 12. SHORTHANDS (NEW) ---
+        {"s(0)",                0, 128, false, true},
+        {"0 s",                 0, 128, true,  true},
+        {"c(0)",                0, 255, false, true},
+        {"0 c",                 0, 255, true,  true},
+        {"f(1.9)",              0,   1, false, true},
+        {"1.9 f",               0,   1, true,  true},
+        {"i(1.9)",              0,   1, false, true},
+        {"1.9 i",               0,   1, true,  true},
+        {"r() * 0",             0,   0, false, true},
+        {"0 r *",               0,   0, true,  true},
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);

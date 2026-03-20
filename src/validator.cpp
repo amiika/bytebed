@@ -101,7 +101,12 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_SQRT: case OP_LOG: case OP_EXP:
             case OP_ABS: case OP_FLOOR: case OP_CEIL: case OP_ROUND:
             case OP_CBRT: case OP_ASIN: case OP_ACOS: case OP_ATAN:
+            case OP_INT: // Added explicit case for OP_INT
                 if (sp < 0) { /* pass */ } break;
+
+            case OP_RAND:
+                if (sp >= 511) return false;
+                v_stack[++sp] = {0, 0}; break;
 
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
             case OP_AND: case OP_OR: case OP_XOR: case OP_SHL: case OP_SHR:

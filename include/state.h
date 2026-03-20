@@ -1,6 +1,5 @@
 #pragma once
 
-// --- Bulletproof Native & Web Gate (Includes) ---
 #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
 #include <M5Cardputer.h>
 #include <M5Unified.h>
@@ -46,7 +45,8 @@ enum OpCode : uint8_t {
     OP_SC_AND, OP_SC_OR, OP_NONE,
     
     OP_ADD_ASSIGN, OP_SUB_ASSIGN, OP_MUL_ASSIGN, OP_DIV_ASSIGN, OP_MOD_ASSIGN,
-    OP_AND_ASSIGN, OP_OR_ASSIGN, OP_XOR_ASSIGN, OP_POW_ASSIGN, OP_SHL_ASSIGN, OP_SHR_ASSIGN
+    OP_AND_ASSIGN, OP_OR_ASSIGN, OP_XOR_ASSIGN, OP_POW_ASSIGN, OP_SHL_ASSIGN, OP_SHR_ASSIGN,
+    OP_RAND, OP_INT, OP_COLON
 };
 
 struct Theme {
@@ -60,7 +60,6 @@ extern int current_theme_idx;
 
 struct Layout { int input_y; int vis_y; int vis_h; };
 
-// --- Bulletproof Native & Web Gate (Variables) ---
 #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
 extern httpd_handle_t stream_server;
 extern DNSServer dnsServer;
