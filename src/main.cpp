@@ -1,16 +1,17 @@
 #include <WiFi.h>
 #include <ESPmDNS.h>
 #include <esp_task_wdt.h> 
+#include <nvs_flash.h> 
 #include "state.h"
 #include "vm.h"
 #include "fast_math.h"
 #include "ui.h"
 #include "captive.h"
-#include "fasti2s.h"
+#include "fasti2s.h" 
 
-// Feature Flags
-const bool TEST_PRESETS = true; 
-const bool REWRITE_PRESETS = true; 
+// --- System Configuration Flags ---
+const bool WIPE_NVRAM = false; 
+const bool FORCE_REWRITE_PRESETS = true; 
 
 // --- Lock-Free UI Decoupling Buffer ---
 #define UI_RING_SIZE 4096
@@ -26,7 +27,9 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
     int16_t pcm_buffer[AUDIO_BUF_SIZE * 2]; 
     uint8_t block_buf[AUDIO_BUF_SIZE];
     int ui_tick = 0;
-    uint32_t wave_ptr = 0;
+    uint32_t wave_ptr = 0; 
+    
+    // Core DSP State Variables for DC Blocking
     float dc_block_in = 0.0f;
     float dc_block_out = 0.0f;
     
@@ -51,8 +54,7 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                         if (++wave_ptr >= 240) wave_ptr = 0; 
                     } else {
                         uint32_t h = ui_ring_head;
-                        uint32_t next_h = h + 1;
-                        if (next_h >= UI_RING_SIZE) next_h = 0; 
+                        uint32_t next_h = (h + 1) % UI_RING_SIZE;
                         if (next_h != ui_ring_tail) { 
                             ui_sample_ring[h] = sample;
                             ui_t_ring[h] = t_raw;
@@ -68,7 +70,6 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                 dc_block_in = raw_float;
                 
                 // TRUE LOGARITHMIC VOLUME SCALING
-                // Cubing the linear 0.0-1.0 float gives us a perfect exponential audio taper
                 float log_vol = volume_perc * volume_perc * volume_perc;
                 int16_t final_pcm = (int16_t)(dc_block_out * log_vol);
                 
@@ -119,58 +120,89 @@ void uiTask(void *pvParameters) {
         
         auto st = M5Cardputer.Keyboard.keysState();
         
-        if (st.opt) strncpy(current_top_text, "LOAD: 0-9", 63);
-        else if (st.alt) strncpy(current_top_text, "SAVE: 0-9", 63);
-        else if (st.ctrl) strncpy(current_top_text, "CTRL: Z / Y", 63);
+        if (st.opt) snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
+        else if (st.alt) snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
+        else if (st.ctrl) snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
         else if (st.fn) strncpy(current_top_text, "FN: 1-4/W/T/S/F/Arr/+-", 63);
-        else strncpy(current_top_text, "BYTEBED", 63);
+        else snprintf(current_top_text, 63, "BYTENATOR [BANK %d]", current_bank);
         current_top_text[63] = '\0'; 
 
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
-            if (st.opt) {
+            
+            // 1. BANK SWITCHING (CTRL + SYMBOL MAPPING)
+            if (st.ctrl) {
+                const char* ctrl_symbols = ")!@#$%^&*("; 
+                bool bankChanged = false;
+
+                for (auto c : st.word) {
+                    for (int i = 0; i < 10; i++) {
+                        if (c == ctrl_symbols[i]) {
+                            current_bank = i;
+                            bankChanged = true;
+                        }
+                    }
+                }
+
+                if (bankChanged) {
+                    status_msg = "BANK " + String(current_bank) + " SEL";
+                    status_timer = millis() + 1500;
+                    goto end_keyboard_logic;
+                }
+
+                if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
+                    int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
+                    if (undo_stack[prev] != "") { undo_ptr = prev; input_buffer = undo_stack[undo_ptr]; cursor_pos = input_buffer.length(); } 
+                }
+                if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
+                    if (undo_ptr != undo_max) { undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; input_buffer = undo_stack[undo_ptr]; cursor_pos = input_buffer.length(); } 
+                }
+            } 
+            
+            // 2. LOAD PATCH (OPT + 0-9)
+            else if (st.opt) {
                 for (int i = 0; i < 10; i++) {
-                    if (M5Cardputer.Keyboard.isKeyPressed('0' + i) && slots[i] != "") {
-                        input_buffer = slots[i]; 
+                    if (M5Cardputer.Keyboard.isKeyPressed('0' + i)) {
+                        input_buffer = slots[current_bank][i].formula; 
+                        current_sample_rate = slots[current_bank][i].sample_rate;
+                        current_play_mode = slots[current_bank][i].mode;
+                        audioOut.setRate(current_sample_rate);
                         cursor_pos = input_buffer.length(); 
                         rpn_mode = false; 
                         saveUndo(); 
                         bool valid = compileInfix(input_buffer, false); 
                         bg_sprite.fillScreen(theme.bg);
-                        applyCompilationResult(valid, "LOAD " + String(i) + " ");
+                        applyCompilationResult(valid, "LOAD B" + String(current_bank) + ":" + String(i));
                     }
                 }
             } 
+            
+            // 3. SAVE PATCH (ALT + 0-9)
             else if (st.alt) {
                 for (int i = 0; i < 10; i++) {
                     if (M5Cardputer.Keyboard.isKeyPressed('0' + i)) {
-                        slots[i] = rpn_mode ? decompile(false) : input_buffer; 
-                        prefs.putString(("s" + String(i)).c_str(), slots[i]);
-                        status_msg = "SAVED " + String(i); 
+                        slots[current_bank][i].formula = rpn_mode ? decompile(false) : input_buffer; 
+                        slots[current_bank][i].sample_rate = current_sample_rate;
+                        slots[current_bank][i].mode = current_play_mode;
+                        
+                        String keySuffix = String(current_bank) + String(i);
+                        prefs.putString(("s" + keySuffix).c_str(), slots[current_bank][i].formula);
+                        prefs.putInt(("sr" + keySuffix).c_str(), slots[current_bank][i].sample_rate);
+                        prefs.putInt(("m" + keySuffix).c_str(), (int)slots[current_bank][i].mode);
+                        
+                        status_msg = "SAVED TO B" + String(current_bank) + ":" + String(i); 
                         status_timer = millis() + 1500;
                     }
                 }
             } 
-            else if (st.ctrl) {
-                if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
-                    int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
-                    if (undo_stack[prev] != "") { 
-                        undo_ptr = prev; input_buffer = undo_stack[undo_ptr]; cursor_pos = input_buffer.length(); 
-                    } 
-                }
-                if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
-                    if (undo_ptr != undo_max) { 
-                        undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; input_buffer = undo_stack[undo_ptr]; cursor_pos = input_buffer.length(); 
-                    } 
-                }
-            } 
+            
+            // 4. FN COMMANDS
             else if (st.fn) {
                 if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
                     if (!is_streaming) {
                         WiFi.mode(WIFI_AP);
                         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-                        if (WiFi.softAP("BYTEBED")) {
-                            is_streaming = true;
-                            initBytebeatServer();
+                        if (WiFi.softAP("BYTENATOR")) {
+                            is_streaming = true; initBytebeatServer();
                             xTaskCreatePinnedToCore(startDnsHijack, "DNS", 2048, NULL, 1, NULL, 1);
                             status_msg = "WIFI ACTIVE";
                         }
@@ -178,8 +210,7 @@ void uiTask(void *pvParameters) {
                     status_timer = millis() + 1500;
                 }
                 if (M5Cardputer.Keyboard.isKeyPressed('t') || M5Cardputer.Keyboard.isKeyPressed('T')) { 
-                    current_theme_idx = (current_theme_idx + 1) % 3; 
-                    bg_sprite.fillScreen(theme.bg); 
+                    current_theme_idx = (current_theme_idx + 1) % 3; bg_sprite.fillScreen(theme.bg); 
                 }
                 if (M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S')) { 
                     if (current_sample_rate == 8000) current_sample_rate = 11025;
@@ -188,9 +219,7 @@ void uiTask(void *pvParameters) {
                     else if (current_sample_rate == 32000) current_sample_rate = 44100;
                     else if (current_sample_rate == 44100) current_sample_rate = 48000;
                     else current_sample_rate = 8000;
-                    
                     audioOut.setRate(current_sample_rate);
-                    
                     status_msg = "RATE: " + String(current_sample_rate) + "Hz";
                     status_timer = millis() + 1500;
                 }
@@ -206,22 +235,21 @@ void uiTask(void *pvParameters) {
                 if (M5Cardputer.Keyboard.isKeyPressed('0')) { current_vis = VIS_HISTORY; }
                 if (M5Cardputer.Keyboard.isKeyPressed('=')) { drawScale = std::min(10, drawScale + 1); bg_sprite.fillScreen(theme.bg); }
                 if (M5Cardputer.Keyboard.isKeyPressed('-')) { drawScale = std::max(0, drawScale - 1); bg_sprite.fillScreen(theme.bg); }
-                
                 if (M5Cardputer.Keyboard.isKeyPressed(';')) { volume_perc = std::min(1.0f, volume_perc + VOL_STEP); }
                 if (M5Cardputer.Keyboard.isKeyPressed('.')) { volume_perc = std::max(0.0f, volume_perc - VOL_STEP); }
-                
                 if (M5Cardputer.Keyboard.isKeyPressed(',')) { if (cursor_pos > 0) cursor_pos--; }
                 if (M5Cardputer.Keyboard.isKeyPressed('/')) { if (cursor_pos < (int)input_buffer.length()) cursor_pos++; }
                 if (M5Cardputer.Keyboard.isKeyPressed('`')) { is_playing = false; t_raw = 0; input_buffer = ""; cursor_pos = 0; bg_sprite.fillScreen(theme.bg); }
             } 
+            
+            // 5. STANDARD TYPING
             else {
                 if (st.word.size() > 0) {
                     for (auto i : st.word) { input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); cursor_pos++; }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
                     rpn_mode = !rpn_mode; input_buffer = decompile(rpn_mode); cursor_pos = input_buffer.length();
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                    saveUndo(); 
-                    bg_sprite.fillScreen(theme.bg); 
+                    saveUndo(); bg_sprite.fillScreen(theme.bg); 
                     bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false); 
                     applyCompilationResult(valid);
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
@@ -230,60 +258,67 @@ void uiTask(void *pvParameters) {
             }
         }
         
+        end_keyboard_logic:
         if (millis() - last_draw > UI_REFRESH_MS) { draw(); last_draw = millis(); }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
 void setup() {
+    if (WIPE_NVRAM) { nvs_flash_erase(); nvs_flash_init(); }
     auto cfg = M5.config(); 
     M5Cardputer.begin(cfg, true); 
     M5.update();
-
     input_buffer.reserve(2048);
-
-    canvas.setColorDepth(8);
-    canvas.createSprite(240, 135); 
-    bg_sprite.setColorDepth(8);
-    bg_sprite.createSprite(240, 135); 
-    bg_sprite.fillScreen(theme.bg);
-
+    canvas.setColorDepth(8); canvas.createSprite(240, 135); 
+    bg_sprite.setColorDepth(8); bg_sprite.createSprite(240, 135); bg_sprite.fillScreen(theme.bg);
     init_fast_math(); 
-
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect(); 
-    
-    // Call this so M5Unified powers on the ES8311 Codec over I2C
-    M5.Speaker.begin(); 
-    M5.Speaker.end(); // Evict M5 software mixer
-    M5.Mic.end();  // Just to be safe   
-    
-    // Initialize bare-metal driver
-    audioOut.begin(current_sample_rate);
+    WiFi.mode(WIFI_STA); WiFi.disconnect(); 
+    M5.Speaker.begin(); M5.Speaker.end(); M5.Mic.end();     
     
     prefs.begin("bytebeat", false);
-    for (int i = 0; i < 10; i++) {
-        if (TEST_PRESETS) { slots[i] = testPresets[i]; }
-        else if (REWRITE_PRESETS) { slots[i] = classicPresets[i]; prefs.putString(("s" + String(i)).c_str(), slots[i]); }
-        else {
-            slots[i] = prefs.getString(("s" + String(i)).c_str(), "");
-            if (slots[i] == "") { 
-                slots[i] = classicPresets[i]; 
-                prefs.putString(("s" + String(i)).c_str(), slots[i]); 
+    for (int b = 0; b < 10; b++) {
+        for (int i = 0; i < 10; i++) {
+            const PresetConfig* defaultPreset = &defaultBanks[b][i];
+            String keySuffix = String(b) + String(i);
+            String sKey = "s" + keySuffix;
+
+            if (FORCE_REWRITE_PRESETS) { 
+                slots[b][i].formula = defaultPreset->formula;
+                slots[b][i].sample_rate = defaultPreset->sample_rate;
+                slots[b][i].mode = defaultPreset->mode;
+                prefs.putString(sKey.c_str(), slots[b][i].formula); 
+                prefs.putInt(("sr"+keySuffix).c_str(), slots[b][i].sample_rate);
+                prefs.putInt(("m"+keySuffix).c_str(), (int)slots[b][i].mode);
+            } else {
+                if (prefs.isKey(sKey.c_str())) {
+                    slots[b][i].formula = prefs.getString(sKey.c_str(), "");
+                    slots[b][i].sample_rate = prefs.getInt(("sr"+keySuffix).c_str(), defaultPreset->sample_rate);
+                    slots[b][i].mode = (PlayMode)prefs.getInt(("m"+keySuffix).c_str(), (int)defaultPreset->mode);
+                } else {
+                    slots[b][i].formula = defaultPreset->formula;
+                    slots[b][i].sample_rate = defaultPreset->sample_rate;
+                    slots[b][i].mode = defaultPreset->mode;
+                }
             }
         }
     }
     
-    input_buffer = slots[0]; 
+    // --- SET BANK 1 AS DEFAULT STARTUP BANK ---
+    current_bank = 1; 
+    input_buffer = slots[1][0].formula; 
+    current_sample_rate = slots[1][0].sample_rate;
+    current_play_mode = slots[1][0].mode;
+    
+    // Boot the hardware matching the default slot
+    audioOut.begin(current_sample_rate);
+    
     undo_stack[0] = input_buffer;
     compileInfix(input_buffer, true);
     active_eval_formula = input_buffer; 
     
-    // One pure, unadulterated audio thread running at maximum priority
     xTaskCreatePinnedToCore(playBytebeat, "audio", 8192, NULL, 24, NULL, 1);
     xTaskCreatePinnedToCore(uiTask, "ui_task", 8192, NULL, 5, NULL, 0);
 }
 
-void loop() {
-    vTaskDelay(portMAX_DELAY);
-}
+void loop() { vTaskDelay(portMAX_DELAY); }

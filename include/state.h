@@ -7,7 +7,6 @@
 #include <esp_http_server.h>
 #include <DNSServer.h>
 #else
-// --- Web & Mac Native Fallback ---
 #include "Arduino.h" 
 #endif
 
@@ -46,7 +45,9 @@ enum OpCode : uint8_t {
     
     OP_ADD_ASSIGN, OP_SUB_ASSIGN, OP_MUL_ASSIGN, OP_DIV_ASSIGN, OP_MOD_ASSIGN,
     OP_AND_ASSIGN, OP_OR_ASSIGN, OP_XOR_ASSIGN, OP_POW_ASSIGN, OP_SHL_ASSIGN, OP_SHR_ASSIGN,
-    OP_RAND, OP_INT, OP_COLON
+    OP_RAND,
+    OP_INT,
+    OP_COLON
 };
 
 struct Theme {
@@ -59,6 +60,18 @@ extern int current_theme_idx;
 #define theme themes[current_theme_idx]
 
 struct Layout { int input_y; int vis_y; int vis_h; };
+
+struct PresetConfig {
+    const char* formula;
+    int sample_rate;
+    PlayMode mode;
+};
+
+struct SlotState {
+    String formula;
+    int sample_rate;
+    PlayMode mode;
+};
 
 #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
 extern httpd_handle_t stream_server;
@@ -82,9 +95,11 @@ extern uint32_t last_draw;
 extern PlayMode current_play_mode;
 extern int current_sample_rate;
 
-extern const char* classicPresets[10];
-extern const char* testPresets[10];
-extern String slots[10];
+// --- 100 PATCH MATRIX ---
+extern const PresetConfig defaultBanks[10][10];
+extern SlotState slots[10][10];
+extern int current_bank;
+
 extern String input_buffer;         
 extern String active_eval_formula;  
 extern String status_msg;
