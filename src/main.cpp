@@ -46,22 +46,26 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
             for(int i = 0; i < AUDIO_BUF_SIZE; i++) {
                 uint8_t sample = block_buf[i];
                 
-                // Zero-division UI feeding
-                if (++ui_tick >= mod) {
-                    ui_tick = 0;
-                    if (current_vis == VIS_WAV_WIRE) { 
+                // --- UI FEEDING LOGIC DECOUPLED ---
+                if (current_vis == VIS_WAV_WIRE) {
+                    // Oscilloscope gets downsampled to allow zooming
+                    if (++ui_tick >= mod) {
+                        ui_tick = 0;
                         wave_buf[wave_ptr] = sample; 
                         if (++wave_ptr >= 240) wave_ptr = 0; 
-                    } else {
-                        uint32_t h = ui_ring_head;
-                        uint32_t next_h = (h + 1) % UI_RING_SIZE;
-                        if (next_h != ui_ring_tail) { 
-                            ui_sample_ring[h] = sample;
-                            ui_t_ring[h] = t_raw;
-                            ui_ring_head = next_h;
-                        }
+                    }
+                } else if (current_vis != VIS_HISTORY) {
+                    // Persistent visualizers require an unbroken stream of 't'
+                    uint32_t h = ui_ring_head;
+                    uint32_t next_h = (h + 1) % UI_RING_SIZE;
+                    if (next_h != ui_ring_tail) { 
+                        ui_sample_ring[h] = sample;
+                        ui_t_ring[h] = t_raw;
+                        ui_ring_head = next_h;
                     }
                 }
+                // ----------------------------------
+                
                 t_raw++;
                 
                 // DC Blocker (1-Pole High-Pass)
@@ -106,6 +110,7 @@ void processUIRingBuffer() {
         ui_ring_tail = (ui_ring_tail + 1) % UI_RING_SIZE;
         processed++;
     }
+    // Drop frames gracefully if the ring buffer overflows
     if (ui_ring_tail != ui_ring_head && processed >= 4000) {
         ui_ring_tail = ui_ring_head;
     }
