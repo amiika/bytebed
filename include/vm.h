@@ -46,7 +46,7 @@ void init_vm_math();
 float fast_sin(float x);
 float fast_pow(float a, float b);
 
-extern const MathFunc mathLibrary[19];
+extern const MathFunc mathLibrary[20];
 extern const int mathLibrarySize;
 
 extern const MathFunc shorthands[5];

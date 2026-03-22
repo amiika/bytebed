@@ -7,8 +7,9 @@ bool validateProgram(uint8_t bank, int len) {
     
     for(int i=0; i<len; i++) {
         OpCode op = program_bank[bank][i].op;
-        if (op == OP_JMP || op == OP_PUSH_FUNC || op == OP_SC_AND || op == OP_SC_OR) {
+        if (op == OP_JMP || op == OP_PUSH_FUNC || op == OP_SC_AND || op == OP_SC_OR || op == OP_SUM_EVAL || op == OP_SUM_DONE) {
             int target_pc = i + program_bank[bank][i].val;
+            if (op == OP_SUM_DONE) target_pc = i - program_bank[bank][i].val;
             if (program_bank[bank][i].val != 0 && (target_pc < 0 || target_pc > len)) return false;
         }
     }
@@ -17,6 +18,8 @@ bool validateProgram(uint8_t bank, int len) {
     static int32_t c_stack[512]; int csp = -1;
     static Val l_vars[64];
     static Val l_shadow_val[512]; int l_ssp = -1;
+    int v_sum_pcs[16];
+    int v_sum_ptr = -1;
 
     memset(l_vars, 0, sizeof(l_vars));
 
@@ -28,7 +31,8 @@ bool validateProgram(uint8_t bank, int len) {
         switch (inst.op) {
             case OP_VAL: case OP_T: 
                 if (sp >= 511) return false;
-                v_stack[++sp] = {0, 0}; break;
+                sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; 
+                break;
             
             case OP_LOAD: 
                 if (sp >= 511) return false;
@@ -47,7 +51,7 @@ bool validateProgram(uint8_t bank, int len) {
             
             case OP_PUSH_FUNC: 
                 if (sp >= 511) return false;
-                v_stack[++sp] = {1, pc + 1}; 
+                sp++; v_stack[sp].type = 1; v_stack[sp].v = (uint32_t)(pc + 1); 
                 pc += inst.val - 1; break; 
             
             case OP_DYN_CALL:
@@ -60,7 +64,7 @@ bool validateProgram(uint8_t bank, int len) {
                 } else {
                     int args = inst.val;
                     if (sp >= args) sp -= args; 
-                    v_stack[sp] = {0, 0}; 
+                    v_stack[sp].type = 0; v_stack[sp].f = 0.0f;
                 }
                 break;
 
@@ -91,6 +95,34 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_AT: if (sp >= 1) { sp--; v_stack[sp].type = 0; } break;
             case OP_STORE_AT: if (sp >= 2) { sp -= 2; v_stack[sp].type = 0; } break;
             
+            case OP_SUM_PREP:
+                if (sp < 1) return false;
+                if (v_stack[sp].type == 1) {
+                    if (v_sum_ptr < 15) v_sum_pcs[++v_sum_ptr] = v_stack[sp].v;
+                } else {
+                    if (v_sum_ptr < 15) v_sum_pcs[++v_sum_ptr] = -1;
+                }
+                sp -= 2; 
+                break;
+            
+            case OP_SUM_EVAL:
+                sp++; v_stack[sp].type = 0; 
+                if (v_sum_ptr >= 0 && v_sum_pcs[v_sum_ptr] != -1) {
+                    if (csp < 511) {
+                        c_stack[++csp] = pc; 
+                        pc = v_sum_pcs[v_sum_ptr] - 1; 
+                        v_sum_pcs[v_sum_ptr] = -1; // Mark as visited
+                    } else return false;
+                }
+                break;
+                
+            case OP_SUM_DONE:
+                if (sp < 0) return false;
+                sp--; 
+                sp++; v_stack[sp].type = 0; 
+                if (v_sum_ptr >= 0) v_sum_ptr--;
+                break;
+
             case OP_SC_AND: case OP_SC_OR:
                 if (inst.val != 0) { if (sp >= 0) sp--; } break;
 
@@ -101,12 +133,12 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_SQRT: case OP_LOG: case OP_EXP:
             case OP_ABS: case OP_FLOOR: case OP_CEIL: case OP_ROUND:
             case OP_CBRT: case OP_ASIN: case OP_ACOS: case OP_ATAN:
-            case OP_INT: // Added explicit case for OP_INT
+            case OP_INT: 
                 if (sp < 0) { /* pass */ } break;
 
             case OP_RAND:
                 if (sp >= 511) return false;
-                v_stack[++sp] = {0, 0}; break;
+                sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; break;
 
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
             case OP_AND: case OP_OR: case OP_XOR: case OP_SHL: case OP_SHR:

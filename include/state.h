@@ -47,6 +47,7 @@ enum OpCode : uint8_t {
     OP_AND_ASSIGN, OP_OR_ASSIGN, OP_XOR_ASSIGN, OP_POW_ASSIGN, OP_SHL_ASSIGN, OP_SHR_ASSIGN,
     OP_RAND,
     OP_INT,
+    OP_SUM_PREP, OP_SUM_EVAL, OP_SUM_DONE, 
     OP_COLON
 };
 
@@ -95,7 +96,6 @@ extern uint32_t last_draw;
 extern PlayMode current_play_mode;
 extern int current_sample_rate;
 
-// --- 100 PATCH MATRIX ---
 extern const PresetConfig defaultBanks[10][10];
 extern SlotState slots[10][10];
 extern int current_bank;

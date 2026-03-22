@@ -1,5 +1,6 @@
 #include "vm.h"
 #include <string.h>
+#include <vector>
 
 String decompileRPN() {
     String out = "";
@@ -121,7 +122,7 @@ String decompileRPN() {
                 break;
             }
             case OP_DYN_CALL: 
-                out += "call" + String(inst.val) + " ";
+                out += "call" + String((int)inst.val) + " ";
                 break;
             case OP_DYN_CALL_IF_FUNC: 
                 break;
@@ -140,6 +141,12 @@ String decompileRPN() {
                 break;
             case OP_STORE_AT:
                 out += "# ";
+                break;
+            case OP_SUM_PREP:
+                out += "sum ";
+                break;
+            case OP_SUM_EVAL:
+            case OP_SUM_DONE:
                 break;
             case OP_SC_AND:
             case OP_SC_OR:
@@ -300,6 +307,14 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             String base = stack[sp--]; 
             String idx = stack[sp--];  
             if (sp < 255) { stack[++sp] = base + "[" + idx + "]"; prec_stack[sp] = 10; }
+        }
+        else if (inst.op == OP_SUM_PREP && sp >= 1) {
+            String f = stack[sp]; sp--;
+            String count = stack[sp]; sp--;
+            if (sp < 255) { stack[++sp] = "sum(" + count + "," + f + ")"; prec_stack[sp] = 10; }
+        }
+        else if (inst.op == OP_SUM_EVAL || inst.op == OP_SUM_DONE) {
+            // These form the backend jump block and don't emit code into the string output.
         }
         else if (inst.op == OP_COND && sp >= 2) {
             String f = stack[sp--]; 

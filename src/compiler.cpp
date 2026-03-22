@@ -138,14 +138,14 @@ static int get_expr_start(uint8_t target, int end_pc) {
 
         if (func_depth == 0) {
             int produces = 1;
-            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET) produces = 0;
+            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_SUM_DONE || op == OP_SUM_EVAL) produces = 0;
             
             int consumes = 0;
-            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT) consumes = 2;
+            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_SUM_PREP) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
             else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT) consumes = 1;
-            else if (op == OP_RAND) consumes = 0; 
+            else if (op == OP_RAND || op == OP_SUM_DONE || op == OP_SUM_EVAL) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
@@ -168,13 +168,24 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 if (cs_ptr >= 0) {
                     program_bank[target][len++] = {OP_RET, 0};
                     int start = cond_starts[cs_ptr--];
-                    program_bank[target][start].val = len - start; 
+                    program_bank[target][start].val = (int32_t)(len - start); 
                 }
                 program_bank[target][len++] = {OP_COND, 0}; 
                 ot--;
             }
-            else if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, os_id[ot--]}; }
-            else if (os[ot] == OP_STORE) { program_bank[target][len++] = {OP_STORE, os_id[ot--]}; }
+            else if (os[ot] == OP_SUM_PREP) {
+                program_bank[target][len++] = {OP_SUM_PREP, 0};
+                int start_pc = len;
+                program_bank[target][len++] = {OP_SUM_EVAL, 0};
+                int eval_pc = len - 1;
+                program_bank[target][len++] = {OP_SUM_DONE, 0};
+                
+                program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
+                program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+                ot--;
+            }
+            else if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)os_id[ot--]}; }
+            else if (os[ot] == OP_STORE) { program_bank[target][len++] = {OP_STORE, (int32_t)os_id[ot--]}; }
             else if (os[ot] == OP_STORE_AT) {
                 int val_start = get_expr_start(target, len - 1);
                 int base_start = get_expr_start(target, val_start - 1);
@@ -198,10 +209,10 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
             }
             else if (os[ot] == OP_SC_AND || os[ot] == OP_SC_OR) {
                 int start = os_id[ot];
-                program_bank[target][start].val = len - start; 
+                program_bank[target][start].val = (int32_t)(len - start); 
                 ot--;
             }
-            else if (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN) { program_bank[target][len++] = {os[ot], os_id[ot]}; ot--; }
+            else if (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN) { program_bank[target][len++] = {os[ot], (int32_t)os_id[ot]}; ot--; }
             else { program_bank[target][len++] = {os[ot--], 0}; }
         } else ot--;
     }
@@ -270,7 +281,16 @@ bool compileRPN(String input) {
 
         if (s.startsWith("&") && s.length() > 1 && isalpha(s[1])) {
             int id = getVarId(s.substring(1));
-            program_bank[target][len++] = {OP_LOAD, id};
+            program_bank[target][len++] = {OP_LOAD, (int32_t)id};
+        }
+        else if (s == "sum") {
+            program_bank[target][len++] = {OP_SUM_PREP, 0};
+            int start_pc = len;
+            program_bank[target][len++] = {OP_SUM_EVAL, 0};
+            int eval_pc = len - 1;
+            program_bank[target][len++] = {OP_SUM_DONE, 0};
+            program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
+            program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
         }
         else if (s == "(") {
             bool is_params = false;
@@ -288,13 +308,13 @@ bool compileRPN(String input) {
                 if (bs_ptr < 0) return false;
                 int start = block_starts[bs_ptr--]; bp_ptr--; 
                 program_bank[target][len++] = {OP_RET, 0}; 
-                program_bank[target][start].val = len - start; 
+                program_bank[target][start].val = (int32_t)(len - start); 
             }
         }
         else if (s == "{") {
             if (bs_ptr < 31) block_starts[++bs_ptr] = len; 
             program_bank[target][len++] = {OP_PUSH_FUNC, 0};
-            for (int k = cp_cnt - 1; k >= 0; k--) program_bank[target][len++] = {OP_BIND, current_params[k]};
+            for (int k = cp_cnt - 1; k >= 0; k--) program_bank[target][len++] = {OP_BIND, (int32_t)current_params[k]};
             if (bp_ptr < 31) {
                 bp_ptr++; bp_counts[bp_ptr] = cp_cnt;
                 for (int k = 0; k < cp_cnt; k++) block_params[bp_ptr][k] = current_params[k];
@@ -306,10 +326,10 @@ bool compileRPN(String input) {
             if (bs_ptr < 0) return false;
             int start = block_starts[bs_ptr--]; 
             int p_cnt = bp_counts[bp_ptr];
-            for (int k = 0; k < p_cnt; k++) program_bank[target][len++] = {OP_UNBIND, block_params[bp_ptr][k]};
+            for (int k = 0; k < p_cnt; k++) program_bank[target][len++] = {OP_UNBIND, (int32_t)block_params[bp_ptr][k]};
             bp_ptr--;
             program_bank[target][len++] = {OP_RET, 0}; 
-            program_bank[target][start].val = len - start; 
+            program_bank[target][start].val = (int32_t)(len - start); 
             if (bas_ptr >= 0) last_completed_arity = block_arity_stack[bas_ptr--];
         }
         else if (s == "=" || s == ":=" || s == "+=" || s == "-=" || s == "*=" || s == "/=" || s == "%=" || s == "&=" || s == "|=" || s == "^=" || s == "<<=" || s == ">>=" || s == "**=") {
@@ -338,7 +358,7 @@ bool compileRPN(String input) {
                         if (program_bank[target][k].op == OP_LOAD && program_bank[target][k].val == var_id) {
                             if (program_bank[target][k+1].op == OP_DYN_CALL_IF_FUNC) {
                                 program_bank[target][k+1].op = OP_DYN_CALL;
-                                program_bank[target][k+1].val = last_completed_arity;
+                                program_bank[target][k+1].val = (int32_t)last_completed_arity;
                             }
                         }
                     }
@@ -359,7 +379,7 @@ bool compileRPN(String input) {
                 else val = c;
                 program_bank[target][len++] = {OP_VAL, setF(val)}; count++;
             }
-            program_bank[target][len++] = {OP_VAL, setF(count)}; program_bank[target][len++] = {OP_VEC, 0}; 
+            program_bank[target][len++] = {OP_VAL, setF((float)count)}; program_bank[target][len++] = {OP_VEC, 0}; 
         }
         else if (parsing_params) { if (cp_cnt < 8) current_params[cp_cnt++] = getVarId(s); }
         else {
@@ -371,7 +391,7 @@ bool compileRPN(String input) {
             else if (s.startsWith("call")) {
                 int args = 0;
                 if (s.length() > 4) args = s.substring(4).toInt();
-                program_bank[target][len++] = {OP_DYN_CALL, args};
+                program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args};
             }
             else {
                 bool is_math = false;
@@ -399,8 +419,8 @@ bool compileRPN(String input) {
                     if (getOpCode(s, opc)) { program_bank[target][len++] = {opc, 0}; is_math = true; } 
                 }
                 if (!is_math) {
-                    int id = getVarId(s); program_bank[target][len++] = {OP_LOAD, id};
-                    if (id < 64 && rpn_func_arity[id] != -1) program_bank[target][len++] = {OP_DYN_CALL, rpn_func_arity[id]};
+                    int id = getVarId(s); program_bank[target][len++] = {OP_LOAD, (int32_t)id};
+                    if (id < 64 && rpn_func_arity[id] != -1) program_bank[target][len++] = {OP_DYN_CALL, (int32_t)rpn_func_arity[id]};
                     else program_bank[target][len++] = {OP_DYN_CALL_IF_FUNC, 0};
                 }
             }
@@ -460,10 +480,10 @@ bool compileInfix(String input, bool reset_t) {
                         if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
                     }
                     
-                    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, lam.p_ids[i]};
+                    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
                     program_bank[target][len++] = {OP_RET, 0}; 
-                    program_bank[target][lam.start_pc].val = len - lam.start_pc; 
-                    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, assigns_to_keep[i]};
+                    program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
+                    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
                     ol_ptr--; expect_op = true;
                 } else break;
             }
@@ -500,7 +520,7 @@ bool compileInfix(String input, bool reset_t) {
             if (*temp == '=' && *(temp+1) == '>') {
                 if (expect_op) return false;
                 int pid = getVarId(word); int start_pc = len;
-                program_bank[target][len++] = {OP_PUSH_FUNC, 0}; program_bank[target][len++] = {OP_BIND, pid};
+                program_bank[target][len++] = {OP_PUSH_FUNC, 0}; program_bank[target][len++] = {OP_BIND, (int32_t)pid};
                 
                 temp += 2; while (isspace(*temp)) temp++;
                 bool braces = (*temp == '{'); if (braces) temp++;
@@ -516,7 +536,7 @@ bool compileInfix(String input, bool reset_t) {
             if (expect_op) return false; 
 
             if (*p == '(') { os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; } 
-            else { program_bank[target][len++] = {OP_LOAD, id}; expect_op = true; }
+            else { program_bank[target][len++] = {OP_LOAD, (int32_t)id}; expect_op = true; }
         }
         else if (*p == '\'') {
             if (expect_op) return false; p++; int count = 0;
@@ -529,7 +549,7 @@ bool compileInfix(String input, bool reset_t) {
                 program_bank[target][len++] = {OP_VAL, setF(val)}; count++; p++; 
             }
             if (*p == '\'') p++;
-            program_bank[target][len++] = {OP_VAL, setF(count)}; program_bank[target][len++] = {OP_VEC, 1}; 
+            program_bank[target][len++] = {OP_VAL, setF((float)count)}; program_bank[target][len++] = {OP_VEC, 1}; 
             expect_op = true;
         }
         else if (*p == '$' && *(p+1) == '[') {
@@ -548,7 +568,7 @@ bool compileInfix(String input, bool reset_t) {
                 int start_pc = len; program_bank[target][len++] = {OP_PUSH_FUNC, 0};
                 LambdaCtx lam; lam.depth = paren_depth; lam.p_cnt = param_cnt; lam.start_pc = start_pc;
                 for (int i = param_cnt - 1; i >= 0; i--) {
-                    int pid = getVarId(params[i]); lam.p_ids[i] = pid; program_bank[target][len++] = {OP_BIND, pid};
+                    int pid = getVarId(params[i]); lam.p_ids[i] = pid; program_bank[target][len++] = {OP_BIND, (int32_t)pid};
                 }
                 p += consume_len; while (isspace(*p)) p++;
                 bool braces = (*p == '{'); if (braces) p++;
@@ -570,8 +590,8 @@ bool compileInfix(String input, bool reset_t) {
                 if (ot >= 0) {
                     if (os[ot] == OP_DYN_CALL) { 
                         if (os_id[ot] != -1) {
-                            program_bank[target][len++] = {OP_LOAD, os_id[ot]}; 
-                            program_bank[target][len++] = {OP_DYN_CALL, args}; 
+                            program_bank[target][len++] = {OP_LOAD, (int32_t)os_id[ot]}; 
+                            program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
                         } else {
                             if (args > 0) {
                                 int args_start = len;
@@ -591,11 +611,25 @@ bool compileInfix(String input, bool reset_t) {
                                 memcpy(&program_bank[target][ptr], &temp[0], expr_len * sizeof(Instruction));
                                 delete[] temp;
                             }
-                            program_bank[target][len++] = {OP_DYN_CALL, args}; 
+                            program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
                         }
                         ot--; 
                     } 
-                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_RAND) { program_bank[target][len++] = {os[ot--], 0}; }
+                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_RAND || os[ot] == OP_SUM_PREP) {
+                        if (os[ot] == OP_SUM_PREP) {
+                            program_bank[target][len++] = {OP_SUM_PREP, 0};
+                            int start_pc = len;
+                            program_bank[target][len++] = {OP_SUM_EVAL, 0};
+                            int eval_pc = len - 1;
+                            program_bank[target][len++] = {OP_SUM_DONE, 0};
+                            
+                            program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
+                            program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+                            ot--;
+                        } else {
+                            program_bank[target][len++] = {os[ot--], 0}; 
+                        }
+                    }
                 }
             }
             paren_depth--; p++; expect_op = true; 
@@ -618,7 +652,7 @@ bool compileInfix(String input, bool reset_t) {
             
             if (btype == 1) { 
                 int size = 0; if (ac_ptr >= 0) size = array_counts[ac_ptr--]; 
-                program_bank[target][len++] = {OP_VAL, setF(size)}; program_bank[target][len++] = {OP_VEC, 0}; expect_op = true;
+                program_bank[target][len++] = {OP_VAL, setF((float)size)}; program_bank[target][len++] = {OP_VEC, 0}; expect_op = true;
             } 
             else if (btype == 3) {
                 program_bank[target][len++] = {OP_ALLOC, 0}; expect_op = true;
@@ -651,10 +685,10 @@ bool compileInfix(String input, bool reset_t) {
                 while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
                     if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
                 }
-                for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, lam.p_ids[i]};
+                for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
                 program_bank[target][len++] = {OP_RET, 0}; 
-                program_bank[target][lam.start_pc].val = len - lam.start_pc; 
-                for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, assigns_to_keep[i]};
+                program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
+                for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
                 ol_ptr--; p++; expect_op = true; 
             } else return false;
         }
@@ -675,7 +709,7 @@ bool compileInfix(String input, bool reset_t) {
             program_bank[target][len++] = {OP_RET, 0}; 
             if (cs_ptr < 0) return false;
             int start = cond_starts[cs_ptr--];
-            program_bank[target][start].val = len - start; 
+            program_bank[target][start].val = (int32_t)(len - start); 
             
             program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
             if (cs_ptr < 127) cond_starts[++cs_ptr] = len - 1; 
@@ -687,7 +721,8 @@ bool compileInfix(String input, bool reset_t) {
             if (!expect_op) return false; expect_op = false; 
             flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
             
-            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT));
+            // BUGFIX: Ensure OP_SUM_PREP isn't treated as a dangling expression to pop
+            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_SUM_PREP));
             bool is_array = (bt_ptr >= 0 && bracket_types[bt_ptr] == 1);
             if (is_func_call) call_arg_counts[cac_ptr]++; 
             else if (is_array) array_counts[ac_ptr]++; 
@@ -739,10 +774,10 @@ bool compileInfix(String input, bool reset_t) {
             while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
                 if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
             }
-            for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, lam.p_ids[i]};
+            for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
             program_bank[target][len++] = {OP_RET, 0}; 
-            program_bank[target][lam.start_pc].val = len - lam.start_pc; 
-            for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, assigns_to_keep[i]};
+            program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
+            for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
             ol_ptr--;
         } else return false; 
     }

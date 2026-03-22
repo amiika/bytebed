@@ -2,7 +2,6 @@
 #include "fast_math.h"
 #include <algorithm>
 
-// --- Global Memory Storage ---
 Instruction program_bank[2][512];
 int prog_len_bank[2] = {0, 0};
 volatile uint8_t active_bank = 0;
@@ -17,7 +16,10 @@ int32_t global_array_capacity = 0;
 float local_array_mem[1024];
 int local_array_ptr = 0;
 
-// --- Internal RAM Management ---
+struct SumState { float acc; float limit; int f_pc; float i; int saved_sp; };
+static SumState sum_stack[32];
+int sum_sp = -1;
+
 void ensure_global_array(int32_t req_size) {
     if (req_size <= 0 || req_size > 65536) return; 
     if (req_size > global_array_capacity) {
@@ -42,7 +44,6 @@ void clear_global_array() {
     }
 }
 
-// --- VM Infrastructure Helpers ---
 inline float encode_vec(int32_t v) { uint32_t u = (uint32_t)v | 0x80000000; return *(float*)&u; }
 inline bool is_vec_tag(float f) { return (*(uint32_t*)&f & 0x80000000) != 0; }
 inline int32_t decode_vec(float f) { return (int32_t)(*(uint32_t*)&f & 0x7FFFFFFF); }
@@ -54,7 +55,6 @@ inline float sanitize(float f) {
     return f;
 }
 
-// Opcodes
 const MathFunc mathLibrary[] = {
     {"sin",   OP_SIN,   true},  {"cos",   OP_COS,   true},  {"tan",   OP_TAN,   true},
     {"sqrt",  OP_SQRT,  true},  {"log",   OP_LOG,   true},  {"exp",   OP_EXP,   true},
@@ -62,9 +62,10 @@ const MathFunc mathLibrary[] = {
     {"round", OP_ROUND, true},  {"cbrt",  OP_CBRT,  true},  {"asin",  OP_ASIN,  true},
     {"acos",  OP_ACOS,  true},  {"atan",  OP_ATAN,  true},
     {"min",   OP_MIN,   false}, {"max",   OP_MAX,   false}, {"pow",   OP_POW,   false},
-    {"random", OP_RAND, true},  {"int",   OP_INT,   true}
+    {"random", OP_RAND, true},  {"int",   OP_INT,   true},
+    {"sum",   OP_SUM_PREP, false}
 };
-const int mathLibrarySize = 19;
+const int mathLibrarySize = 20;
 
 const MathFunc shorthands[] = {
     {"s", OP_SIN, true},
@@ -94,7 +95,6 @@ const OpInfo opList[] = {
 };
 const int opListSize = 37;
 
-// Helpers
 int getVarId(String name) {
     for (int i = 0; i < var_count; i++) {
         if (symNames[i] == name) return i;
@@ -146,7 +146,6 @@ bool getOpCode(const String& sym, OpCode& outCode) {
     return false;
 }
 
-// --- VM Execution ---
 void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     uint8_t bank = active_bank; 
     int len = prog_len_bank[bank];
@@ -172,7 +171,9 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         &&L_OP_SC_AND, &&L_OP_SC_OR, &&L_DEFAULT,
         &&L_OP_ADD_ASSIGN, &&L_OP_SUB_ASSIGN, &&L_OP_MUL_ASSIGN, &&L_OP_DIV_ASSIGN, &&L_OP_MOD_ASSIGN,
         &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN,
-        &&L_OP_RAND, &&L_OP_INT
+        &&L_OP_RAND, &&L_OP_INT,
+        &&L_OP_SUM_PREP, &&L_OP_SUM_EVAL, &&L_OP_SUM_DONE,
+        &&L_DEFAULT
     };
 
     Instruction* prog = program_bank[bank];
@@ -182,9 +183,10 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         vars[t_var_id].type = 0;
         vars[t_var_id].f = (float)(start_t + sample_idx); 
 
-        int32_t t = start_t + sample_idx; // Backwards compatibility for OP_T
+        int32_t t = start_t + sample_idx; 
         local_array_ptr = 0; 
         int sp = -1; int csp = -1; int ssp = -1;
+        sum_sp = -1; // Reset sum isolated stack
         Val tos = {0, 0}; 
 
         int pc = 0;
@@ -322,6 +324,50 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
 
         L_OP_INT: { tos.f = (float)((int32_t)tos.f); BOING(); }
+
+        L_OP_SUM_PREP: {
+            Val func = tos;
+            Val count = stack[sp--];
+            if (sum_sp < 31) {
+                sum_stack[++sum_sp] = {0.0f, count.f, (int)func.v, 0.0f, sp};
+            }
+            tos.type = 0; tos.f = 0.0f;
+            BOING();
+        }
+        
+        L_OP_SUM_EVAL: {
+            if (sum_sp >= 0) {
+                SumState& s = sum_stack[sum_sp];
+                if (s.i >= s.limit) {
+                    tos.type = 0;
+                    tos.f = s.acc;
+                    sp = s.saved_sp;
+                    sum_sp--;
+                    pc += inst.val - 1;
+                } else {
+                    s.saved_sp = sp; 
+                    if (csp < 511) { call_stack[++csp] = pc; pc = s.f_pc - 1; }
+                    
+                    stack[++sp].type = 0; stack[sp].f = 0.0f;
+                    tos.type = 0; tos.f = s.i; 
+                }
+            } else {
+                tos.type = 0; tos.f = 0.0f;
+            }
+            BOING();
+        }
+        
+        L_OP_SUM_DONE: {
+            if (sum_sp >= 0) {
+                SumState& s = sum_stack[sum_sp];
+                s.acc += tos.f; 
+                s.i += 1.0f;
+                sp = s.saved_sp;
+                pc -= inst.val - 1;     
+            }
+            tos.type = 0; tos.f = 0.0f;
+            BOING();
+        }
 
         L_DEFAULT: BOING();
         L_END:
