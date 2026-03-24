@@ -11,7 +11,7 @@
 
 // --- System Configuration Flags ---
 const bool WIPE_NVRAM = false; 
-const bool FORCE_REWRITE_PRESETS = true; 
+const bool FORCE_REWRITE_PRESETS = false; 
 
 // --- Lock-Free UI Decoupling Buffer ---
 #define UI_RING_SIZE 4096
@@ -129,7 +129,7 @@ void uiTask(void *pvParameters) {
         else if (st.alt) snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
         else if (st.ctrl) snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
         else if (st.fn) strncpy(current_top_text, "FN: 1-4/W/T/S/F/Arr/+-", 63);
-        else snprintf(current_top_text, 63, "BYTENATOR [BANK %d]", current_bank);
+        else strncpy(current_top_text, "BYTEBED", 63); 
         current_top_text[63] = '\0'; 
 
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
@@ -176,7 +176,7 @@ void uiTask(void *pvParameters) {
                         saveUndo(); 
                         bool valid = compileInfix(input_buffer, false); 
                         bg_sprite.fillScreen(theme.bg);
-                        applyCompilationResult(valid, "LOAD B" + String(current_bank) + ":" + String(i));
+                        applyCompilationResult(valid, "LOAD " + String(i) + " @ B" + String(current_bank) + " ");
                     }
                 }
             } 
@@ -190,11 +190,13 @@ void uiTask(void *pvParameters) {
                         slots[current_bank][i].mode = current_play_mode;
                         
                         String keySuffix = String(current_bank) + String(i);
-                        prefs.putString(("s" + keySuffix).c_str(), slots[current_bank][i].formula);
-                        prefs.putInt(("sr" + keySuffix).c_str(), slots[current_bank][i].sample_rate);
-                        prefs.putInt(("m" + keySuffix).c_str(), (int)slots[current_bank][i].mode);
                         
-                        status_msg = "SAVED TO B" + String(current_bank) + ":" + String(i); 
+                        String packed = String((int)slots[current_bank][i].mode) + "|" + 
+                                        String(slots[current_bank][i].sample_rate) + "|" + 
+                                        slots[current_bank][i].formula;
+                        prefs.putString(("s" + keySuffix).c_str(), packed);
+                        
+                        status_msg = "SAVE " + String(i) + " @ B" + String(current_bank) + " OK"; 
                         status_timer = millis() + 1500;
                     }
                 }
@@ -204,9 +206,11 @@ void uiTask(void *pvParameters) {
             else if (st.fn) {
                 if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
                     if (!is_streaming) {
+                        WiFi.persistent(false); 
                         WiFi.mode(WIFI_AP);
                         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-                        if (WiFi.softAP("BYTENATOR")) {
+                        if (WiFi.softAP("BYTEBED")) {
+                            MDNS.begin("bytebed");
                             is_streaming = true; initBytebeatServer();
                             xTaskCreatePinnedToCore(startDnsHijack, "DNS", 2048, NULL, 1, NULL, 1);
                             status_msg = "WIFI ACTIVE";
@@ -278,6 +282,8 @@ void setup() {
     canvas.setColorDepth(8); canvas.createSprite(240, 135); 
     bg_sprite.setColorDepth(8); bg_sprite.createSprite(240, 135); bg_sprite.fillScreen(theme.bg);
     init_fast_math(); 
+    
+    WiFi.persistent(false); // STOP WIFI FROM SPAMMING NVS
     WiFi.mode(WIFI_STA); WiFi.disconnect(); 
     M5.Speaker.begin(); M5.Speaker.end(); M5.Mic.end();     
     
@@ -292,14 +298,26 @@ void setup() {
                 slots[b][i].formula = defaultPreset->formula;
                 slots[b][i].sample_rate = defaultPreset->sample_rate;
                 slots[b][i].mode = defaultPreset->mode;
-                prefs.putString(sKey.c_str(), slots[b][i].formula); 
-                prefs.putInt(("sr"+keySuffix).c_str(), slots[b][i].sample_rate);
-                prefs.putInt(("m"+keySuffix).c_str(), (int)slots[b][i].mode);
+                
+                String packed = String((int)slots[b][i].mode) + "|" + 
+                                String(slots[b][i].sample_rate) + "|" + 
+                                slots[b][i].formula;
+                prefs.putString(sKey.c_str(), packed); 
             } else {
                 if (prefs.isKey(sKey.c_str())) {
-                    slots[b][i].formula = prefs.getString(sKey.c_str(), "");
-                    slots[b][i].sample_rate = prefs.getInt(("sr"+keySuffix).c_str(), defaultPreset->sample_rate);
-                    slots[b][i].mode = (PlayMode)prefs.getInt(("m"+keySuffix).c_str(), (int)defaultPreset->mode);
+                    String packed = prefs.getString(sKey.c_str(), "");
+                    int p1 = packed.indexOf('|');
+                    int p2 = packed.indexOf('|', p1 + 1);
+                    
+                    if (p1 > 0 && p2 > p1) {
+                        slots[b][i].mode = (PlayMode)packed.substring(0, p1).toInt();
+                        slots[b][i].sample_rate = packed.substring(p1 + 1, p2).toInt();
+                        slots[b][i].formula = packed.substring(p2 + 1);
+                    } else {
+                        slots[b][i].formula = defaultPreset->formula;
+                        slots[b][i].sample_rate = defaultPreset->sample_rate;
+                        slots[b][i].mode = defaultPreset->mode;
+                    }
                 } else {
                     slots[b][i].formula = defaultPreset->formula;
                     slots[b][i].sample_rate = defaultPreset->sample_rate;

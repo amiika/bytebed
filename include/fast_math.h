@@ -7,7 +7,6 @@ extern float sin_lut[1025];
 void init_fast_math();
 
 inline float fast_sin(float x) {
-    // 1-cycle phase wrap using strict 32-bit int casting
     float pos = x * 0.15915494309189535f; 
     pos -= (float)((int32_t)pos);
     if (pos < 0.0f) pos += 1.0f;
@@ -25,24 +24,20 @@ inline float fast_pow(float a, float b) {
     union { float f; uint32_t i; } u = { a };
     float log2_a;
     
-    // --- 1. ENVELOPE PRECISION PROTECTOR ---
     if (a > 0.95f && a < 1.05f) {
-        log2_a = (a - 1.0f) * 1.44269504089f; // Taylor Series approximation
+        log2_a = (a - 1.0f) * 1.44269504089f; 
     } else {
-        // Standard Schraudolph bit-hack
         log2_a = (float)((int32_t)u.i - 0x3f800000) * 1.1920928955078125e-7f;
     }
 
     float res_log2 = b * log2_a;
     
-    // --- 2. DENORMAL STORM ANTI-LAG ---
     if (res_log2 < -126.0f) return 0.0f;
     
     union { uint32_t i; float f; } v = { (uint32_t)(res_log2 * 8388608.0f + 0x3f800000) };
     return v.f;
 }
 #else
-// WASM targets bypass the LUT to use the browser's high-speed native FPU math
 inline void init_fast_math() {} 
 #define fast_sin(x) sinf(x)
 #define fast_pow(a, b) powf(a, b)

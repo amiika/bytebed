@@ -138,14 +138,14 @@ static int get_expr_start(uint8_t target, int end_pc) {
 
         if (func_depth == 0) {
             int produces = 1;
-            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_SUM_DONE || op == OP_SUM_EVAL) produces = 0;
+            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) produces = 0;
             
             int consumes = 0;
-            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_SUM_PREP) consumes = 2;
+            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_LOOP_PREP) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
             else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT) consumes = 1;
-            else if (op == OP_RAND || op == OP_SUM_DONE || op == OP_SUM_EVAL) consumes = 0; 
+            else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
@@ -173,12 +173,12 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 program_bank[target][len++] = {OP_COND, 0}; 
                 ot--;
             }
-            else if (os[ot] == OP_SUM_PREP) {
-                program_bank[target][len++] = {OP_SUM_PREP, 0};
+            else if (os[ot] == OP_LOOP_PREP) {
+                program_bank[target][len++] = {OP_LOOP_PREP, (int32_t)os_id[ot]};
                 int start_pc = len;
-                program_bank[target][len++] = {OP_SUM_EVAL, 0};
+                program_bank[target][len++] = {OP_LOOP_EVAL, 0};
                 int eval_pc = len - 1;
-                program_bank[target][len++] = {OP_SUM_DONE, 0};
+                program_bank[target][len++] = {OP_LOOP_DONE, 0};
                 
                 program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
                 program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
@@ -187,23 +187,6 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
             else if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)os_id[ot--]}; }
             else if (os[ot] == OP_STORE) { program_bank[target][len++] = {OP_STORE, (int32_t)os_id[ot--]}; }
             else if (os[ot] == OP_STORE_AT) {
-                int val_start = get_expr_start(target, len - 1);
-                int base_start = get_expr_start(target, val_start - 1);
-                int idx_start = get_expr_start(target, base_start - 1);
-                
-                int val_len = len - val_start;
-                int base_len = val_start - base_start;
-                int idx_len = base_start - idx_start;
-                
-                Instruction* temp = new Instruction[512];
-                memcpy(temp, &program_bank[target][idx_start], (idx_len + base_len + val_len) * sizeof(Instruction));
-                
-                int ptr = idx_start;
-                memcpy(&program_bank[target][ptr], &temp[idx_len + base_len], val_len * sizeof(Instruction)); ptr += val_len;
-                memcpy(&program_bank[target][ptr], &temp[0], idx_len * sizeof(Instruction)); ptr += idx_len;
-                memcpy(&program_bank[target][ptr], &temp[idx_len], base_len * sizeof(Instruction)); ptr += base_len;
-                
-                delete[] temp;
                 program_bank[target][len++] = {OP_STORE_AT, 0}; 
                 ot--;
             }
@@ -283,12 +266,14 @@ bool compileRPN(String input) {
             int id = getVarId(s.substring(1));
             program_bank[target][len++] = {OP_LOAD, (int32_t)id};
         }
-        else if (s == "sum") {
-            program_bank[target][len++] = {OP_SUM_PREP, 0};
+        else if (s == "sum" || s == "gen" || s == "map" || s == "reduce" || s == "filter") {
+            int ltype = 0;
+            if (s == "gen") ltype = 1; else if (s == "map") ltype = 2; else if (s == "reduce") ltype = 3; else if (s == "filter") ltype = 4;
+            program_bank[target][len++] = {OP_LOOP_PREP, ltype};
             int start_pc = len;
-            program_bank[target][len++] = {OP_SUM_EVAL, 0};
+            program_bank[target][len++] = {OP_LOOP_EVAL, 0};
             int eval_pc = len - 1;
-            program_bank[target][len++] = {OP_SUM_DONE, 0};
+            program_bank[target][len++] = {OP_LOOP_DONE, 0};
             program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
             program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
         }
@@ -503,6 +488,13 @@ bool compileInfix(String input, bool reset_t) {
             for (int _m = 0; _m < mathLibrarySize; _m++) { 
                 if (word == mathLibrary[_m].name) { if (expect_op) return false; expect_op = false; os[++ot] = mathLibrary[_m].code; os_id[ot] = 0; is_math = true; break; } 
             }
+            if (!is_math && (word == "sum" || word == "gen" || word == "map" || word == "reduce" || word == "filter")) {
+                if (expect_op) return false; expect_op = false; 
+                os[++ot] = OP_LOOP_PREP; 
+                int ltype = 0; if (word == "gen") ltype = 1; else if (word == "map") ltype = 2; else if (word == "reduce") ltype = 3; else if (word == "filter") ltype = 4;
+                os_id[ot] = ltype; 
+                is_math = true; 
+            }
             if (!is_math && !isVarDefined(word)) {
                 const char* temp2 = p;
                 while (isspace(*temp2)) temp2++;
@@ -615,13 +607,13 @@ bool compileInfix(String input, bool reset_t) {
                         }
                         ot--; 
                     } 
-                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_RAND || os[ot] == OP_SUM_PREP) {
-                        if (os[ot] == OP_SUM_PREP) {
-                            program_bank[target][len++] = {OP_SUM_PREP, 0};
+                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_RAND || os[ot] == OP_LOOP_PREP) {
+                        if (os[ot] == OP_LOOP_PREP) {
+                            program_bank[target][len++] = {os[ot], (int32_t)os_id[ot]}; 
                             int start_pc = len;
-                            program_bank[target][len++] = {OP_SUM_EVAL, 0};
+                            program_bank[target][len++] = {OP_LOOP_EVAL, 0};
                             int eval_pc = len - 1;
-                            program_bank[target][len++] = {OP_SUM_DONE, 0};
+                            program_bank[target][len++] = {OP_LOOP_DONE, 0};
                             
                             program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
                             program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
@@ -658,22 +650,27 @@ bool compileInfix(String input, bool reset_t) {
                 program_bank[target][len++] = {OP_ALLOC, 0}; expect_op = true;
             }
             else { 
-                int idx_start = get_expr_start(target, len - 1);
-                int base_start = get_expr_start(target, idx_start - 1);
-                int idx_len = len - idx_start;
-                int base_len = idx_start - base_start;
-                
-                Instruction* temp = new Instruction[512];
-                memcpy(temp, &program_bank[target][base_start], (base_len + idx_len) * sizeof(Instruction));
-                
-                int ptr = base_start;
-                memcpy(&program_bank[target][ptr], &temp[base_len], idx_len * sizeof(Instruction)); ptr += idx_len;
-                memcpy(&program_bank[target][ptr], &temp[0], base_len * sizeof(Instruction));
-                
-                delete[] temp;
                 program_bank[target][len++] = {OP_AT, 0}; expect_op = true;
             }
             paren_depth--; p++;
+        }
+        else if (*p == '.') {
+            if (!expect_op) return false; 
+            p++;
+            String method = "";
+            while (isalpha(*p) || isdigit(*p) || *p == '_') method += *p++;
+            if (method == "sum" || method == "gen" || method == "map" || method == "reduce" || method == "filter") {
+                os[++ot] = OP_LOOP_PREP;
+                int ltype = 0;
+                if (method == "gen") ltype = 1;
+                else if (method == "map") ltype = 2;
+                else if (method == "reduce") ltype = 3;
+                else if (method == "filter") ltype = 4;
+                os_id[ot] = ltype;
+                expect_op = false; 
+            } else {
+                return false; 
+            }
         }
         else if (*p == '{') { return false; } 
         else if (*p == '}') {
@@ -721,8 +718,7 @@ bool compileInfix(String input, bool reset_t) {
             if (!expect_op) return false; expect_op = false; 
             flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
             
-            // BUGFIX: Ensure OP_SUM_PREP isn't treated as a dangling expression to pop
-            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_SUM_PREP));
+            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_LOOP_PREP));
             bool is_array = (bt_ptr >= 0 && bracket_types[bt_ptr] == 1);
             if (is_func_call) call_arg_counts[cac_ptr]++; 
             else if (is_array) array_counts[ac_ptr]++; 

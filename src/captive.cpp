@@ -41,9 +41,10 @@ static esp_err_t ws_handler(httpd_req_t *req) {
 
         char jsonStr[1024]; 
         snprintf(jsonStr, sizeof(jsonStr), 
-                 "{\"f\":\"%s\",\"ef\":\"%s\",\"v\":%d,\"r\":%d,\"g\":%d,\"b\":%d,\"s\":%d,\"p\":%s,\"cp\":%d,\"t\":%ld,\"m\":\"%s\",\"sm\":\"%s\"}",
+                 "{\"f\":\"%s\",\"ef\":\"%s\",\"v\":%d,\"r\":%d,\"g\":%d,\"b\":%d,\"s\":%d,\"p\":%s,\"cp\":%d,\"t\":%ld,\"m\":\"%s\",\"sm\":\"%s\",\"pm\":%d,\"sr\":%d}",
                  safe_formula.c_str(), eval_formula.c_str(), current_vis, theme.r_base, theme.g_base, theme.b_base, 
-                 drawScale, is_playing ? "true" : "false", cursor_pos, (long)t_raw, top_text.c_str(), sm_text.c_str());
+                 drawScale, is_playing ? "true" : "false", cursor_pos, (long)t_raw, top_text.c_str(), sm_text.c_str(),
+                 (int)current_play_mode, current_sample_rate);
 
         httpd_ws_frame_t ws_text;
         memset(&ws_text, 0, sizeof(httpd_ws_frame_t));
@@ -84,7 +85,7 @@ void initBytebeatServer() {
 
     if (httpd_start(&stream_server, &config) == ESP_OK) {
         httpd_register_uri_handler(stream_server, &html_uri);
-        httpd_register_uri_handler(stream_server, &wasm_uri); // Enable WASM serving
+        httpd_register_uri_handler(stream_server, &wasm_uri); 
         httpd_register_uri_handler(stream_server, &ws_uri);
         httpd_register_err_handler(stream_server, HTTPD_404_NOT_FOUND, captive_portal_handler); 
     }

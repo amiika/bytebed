@@ -142,11 +142,15 @@ String decompileRPN() {
             case OP_STORE_AT:
                 out += "# ";
                 break;
-            case OP_SUM_PREP:
-                out += "sum ";
+            case OP_LOOP_PREP:
+                if (inst.val == 1) out += "gen ";
+                else if (inst.val == 2) out += "map ";
+                else if (inst.val == 3) out += "reduce ";
+                else if (inst.val == 4) out += "filter ";
+                else out += "sum ";
                 break;
-            case OP_SUM_EVAL:
-            case OP_SUM_DONE:
+            case OP_LOOP_EVAL:
+            case OP_LOOP_DONE:
                 break;
             case OP_SC_AND:
             case OP_SC_OR:
@@ -231,9 +235,9 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (sp < 255) { stack[++sp] = getVarName(inst.val) + op_str + val; prec_stack[sp] = -1; }
         }
         else if (inst.op == OP_STORE_AT && sp >= 2) {
-            String base = stack[sp]; sp--; 
-            String idx = stack[sp]; sp--;  
-            String val = stack[sp]; sp--;  
+            String val = stack[sp--]; 
+            String idx = stack[sp--];  
+            String base = stack[sp--];  
             if (sp < 255) { stack[++sp] = base + "[" + idx + "]=" + val; prec_stack[sp] = -1; }
         }
         else if (inst.op == OP_POP && sp >= 0) {
@@ -304,17 +308,30 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (sp < 255) { stack[++sp] = "$[" + size + "]"; prec_stack[sp] = 10; }
         }
         else if (inst.op == OP_AT && sp >= 1) {
-            String base = stack[sp--]; 
             String idx = stack[sp--];  
+            String base = stack[sp--]; 
             if (sp < 255) { stack[++sp] = base + "[" + idx + "]"; prec_stack[sp] = 10; }
         }
-        else if (inst.op == OP_SUM_PREP && sp >= 1) {
+        else if (inst.op == OP_LOOP_PREP && sp >= 1) {
             String f = stack[sp]; sp--;
             String count = stack[sp]; sp--;
-            if (sp < 255) { stack[++sp] = "sum(" + count + "," + f + ")"; prec_stack[sp] = 10; }
+            String fnName = "sum";
+            if (inst.val == 1) fnName = "gen";
+            else if (inst.val == 2) fnName = "map";
+            else if (inst.val == 3) fnName = "reduce";
+            else if (inst.val == 4) fnName = "filter";
+            
+            bool use_dot = true;
+            if (isdigit(count[0]) || count[0] == '-' || count[0] == '(') use_dot = false; 
+            if (inst.val == 1) use_dot = false; 
+            
+            if (use_dot) {
+                if (sp < 255) { stack[++sp] = count + "." + fnName + "(" + f + ")"; prec_stack[sp] = 10; }
+            } else {
+                if (sp < 255) { stack[++sp] = fnName + "(" + count + "," + f + ")"; prec_stack[sp] = 10; }
+            }
         }
-        else if (inst.op == OP_SUM_EVAL || inst.op == OP_SUM_DONE) {
-            // These form the backend jump block and don't emit code into the string output.
+        else if (inst.op == OP_LOOP_EVAL || inst.op == OP_LOOP_DONE) {
         }
         else if (inst.op == OP_COND && sp >= 2) {
             String f = stack[sp--]; 

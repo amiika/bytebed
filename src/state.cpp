@@ -84,9 +84,9 @@ const PresetConfig defaultBanks[10][10] = {
         {"p=t*0.025,x=L=>sum(4,i=>s(p*(i+1)*L+s(t*0.001*i)))/ 4,[x(1.0),x(1.005)]", 48000, MODE_FLOATBEAT},                                  
         {"p=t*0.015,x=L=>sum(4,i=>s(p*(i+1)*L+s(t*0.001*i)))/ 4,[x(1.0),x(1.005)]", 48000, MODE_FLOATBEAT},                                           
         {"p=t*pi/16/2**(t/3e6),f=x=>s(x+s(x)),x=L=>sum(3,i=>f(p*L/2**(i*9/12))*5**(-.00007214*(t%(65536*2**(i/2)))))/6,[x(0.105),x(.95)]", 48000, MODE_FLOATBEAT},                                           
-        {"e=256,r=40,d=32,p=t*2**([0,12,12,0,12,12,5,7][7&t>>13]/12)/2.43,env=r-t/e%d,sin(sin(sin(p*pi/16)/76*env+p*pi/256)/8*env+p*pi/256)*env/64", 48000, MODE_FLOATBEAT}, 
-        {"x = (lr) => sum(3,i=>s(t*0.03*2**(i)*lr+s(t*0.005)*2))/3,[x(1.01),x(0.99)]", 48000, MODE_FLOATBEAT},                                         
-        {"sin(t/(t&16384?1.5:1)/[1,2,3,4,1,2,3,4,6,4,5,4,8,8,8,8][15&t>>10])/((t&[1023,1023,1023,2047][3&t>>12])*.01)", 48000, MODE_FLOATBEAT}                                                  
+        {"[20.0, 10.0, 5.0, 2.5].reduce((a, v) => s(t * v * 0.001 + a * 2.0))", 48000, MODE_FLOATBEAT}, 
+        {"[1,3,5,7].reduce((a,v)=>max(a,s(t*v*0.0015)/v))", 48000, MODE_FLOATBEAT},                                         
+        {"c=[1.0,1.2,1.5,1.8],o=1+(floor(t/16000)%2),f=c.map(x=>x*100*o),f.sum(n=>s(t *n*0.005))/4*exp(-(t%1000)/500)", 48000, MODE_FLOATBEAT}                                                  
     },
     { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET },
     { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET },

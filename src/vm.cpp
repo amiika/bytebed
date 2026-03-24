@@ -16,9 +16,18 @@ int32_t global_array_capacity = 0;
 float local_array_mem[1024];
 int local_array_ptr = 0;
 
-struct SumState { float acc; float limit; int f_pc; float i; int saved_sp; };
-static SumState sum_stack[32];
-int sum_sp = -1;
+struct LoopState { 
+    int type;       // 0=SUM, 1=GEN, 2=MAP, 3=REDUCE, 4=FILTER
+    float acc;      
+    float limit;    
+    int f_pc;       
+    float i;        
+    int saved_sp;   
+    Val iterable;   
+    float current_val; // Retained for filter repackaging
+};
+static LoopState loop_stack[32];
+int loop_sp = -1;
 
 void ensure_global_array(int32_t req_size) {
     if (req_size <= 0 || req_size > 65536) return; 
@@ -62,17 +71,12 @@ const MathFunc mathLibrary[] = {
     {"round", OP_ROUND, true},  {"cbrt",  OP_CBRT,  true},  {"asin",  OP_ASIN,  true},
     {"acos",  OP_ACOS,  true},  {"atan",  OP_ATAN,  true},
     {"min",   OP_MIN,   false}, {"max",   OP_MAX,   false}, {"pow",   OP_POW,   false},
-    {"random", OP_RAND, true},  {"int",   OP_INT,   true},
-    {"sum",   OP_SUM_PREP, false}
+    {"random", OP_RAND, true},  {"int",   OP_INT,   true}
 };
-const int mathLibrarySize = 20;
+const int mathLibrarySize = 19;
 
 const MathFunc shorthands[] = {
-    {"s", OP_SIN, true},
-    {"c", OP_COS, true},
-    {"f", OP_FLOOR, true},
-    {"i", OP_INT, true},
-    {"r", OP_RAND, true}
+    {"s", OP_SIN, true}, {"c", OP_COS, true}, {"f", OP_FLOOR, true}, {"i", OP_INT, true}, {"r", OP_RAND, true}
 };
 const int shorthandsSize = 5;
 
@@ -96,9 +100,7 @@ const OpInfo opList[] = {
 const int opListSize = 37;
 
 int getVarId(String name) {
-    for (int i = 0; i < var_count; i++) {
-        if (symNames[i] == name) return i;
-    }
+    for (int i = 0; i < var_count; i++) if (symNames[i] == name) return i;
     if (var_count >= 63) return 63; 
     symNames[var_count] = name;
     return var_count++;
@@ -110,16 +112,12 @@ String getVarName(int id) {
 }
 
 bool isVarDefined(const String& name) {
-    for (int i = 0; i < var_count; i++) {
-        if (symNames[i] == name) return true;
-    }
+    for (int i = 0; i < var_count; i++) if (symNames[i] == name) return true;
     return false;
 }
 
 int getPrecedence(OpCode op) {
-    for (int i = 0; i < opListSize; i++) {
-        if (opList[i].code == op) return opList[i].precedence;
-    }
+    for (int i = 0; i < opListSize; i++) if (opList[i].code == op) return opList[i].precedence;
     if (op == OP_COND || op == OP_COLON) return 0;
     if (op == OP_ASSIGN_VAR || op == OP_STORE_AT || (op >= OP_ADD_ASSIGN && op <= OP_SHR_ASSIGN)) return -1;
     if (op == OP_STORE || op == OP_STORE_KEEP) return -2;
@@ -137,12 +135,7 @@ String getOpSym(OpCode op) {
 }
 
 bool getOpCode(const String& sym, OpCode& outCode) {
-    for (int i = 0; i < opListSize; i++) {
-        if (sym == opList[i].sym) {
-            outCode = opList[i].code;
-            return true;
-        }
-    }
+    for (int i = 0; i < opListSize; i++) if (sym == opList[i].sym) { outCode = opList[i].code; return true; }
     return false;
 }
 
@@ -152,9 +145,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     bool is_bb = (current_play_mode == MODE_BYTEBEAT);
     if (len == 0) { memset(out_buf, 128, length); return; }
 
-    static Val stack[512]; 
-    static int32_t call_stack[512]; 
-    static Val shadow_val[512]; 
+    static Val stack[512]; static int32_t call_stack[512]; static Val shadow_val[512]; 
 
     static const void* dispatch_table[] = {
         &&L_OP_VAL, &&L_OP_T, &&L_OP_LOAD, &&L_OP_STORE, &&L_OP_STORE_KEEP, &&L_OP_POP,
@@ -172,7 +163,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         &&L_OP_ADD_ASSIGN, &&L_OP_SUB_ASSIGN, &&L_OP_MUL_ASSIGN, &&L_OP_DIV_ASSIGN, &&L_OP_MOD_ASSIGN,
         &&L_OP_AND_ASSIGN, &&L_OP_OR_ASSIGN, &&L_OP_XOR_ASSIGN, &&L_OP_POW_ASSIGN, &&L_OP_SHL_ASSIGN, &&L_OP_SHR_ASSIGN,
         &&L_OP_RAND, &&L_OP_INT,
-        &&L_OP_SUM_PREP, &&L_OP_SUM_EVAL, &&L_OP_SUM_DONE,
+        &&L_OP_LOOP_PREP, &&L_OP_LOOP_EVAL, &&L_OP_LOOP_DONE,
         &&L_DEFAULT
     };
 
@@ -180,19 +171,12 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     int t_var_id = getVarId("t");
 
     for (int sample_idx = 0; sample_idx < length; sample_idx++) {
-        vars[t_var_id].type = 0;
-        vars[t_var_id].f = (float)(start_t + sample_idx); 
-
+        vars[t_var_id].type = 0; vars[t_var_id].f = (float)(start_t + sample_idx); 
         int32_t t = start_t + sample_idx; 
-        local_array_ptr = 0; 
-        int sp = -1; int csp = -1; int ssp = -1;
-        sum_sp = -1; // Reset sum isolated stack
+        local_array_ptr = 0; int sp = -1; int csp = -1; int ssp = -1; loop_sp = -1; 
         Val tos = {0, 0}; 
 
-        int pc = 0;
-        Instruction inst = prog[pc];
-        goto *dispatch_table[inst.op];
-
+        int pc = 0; Instruction inst = prog[pc]; goto *dispatch_table[inst.op];
         #define BOING() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[inst.op]; } while(0)
 
         L_OP_VAL: stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BOING();
@@ -211,11 +195,11 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         L_OP_RET: if (csp >= 0) pc = call_stack[csp--]; else pc = len; BOING();
         L_OP_BIND: if (ssp < 511) shadow_val[++ssp] = vars[inst.val]; vars[inst.val] = tos; tos = stack[sp--]; BOING();
         L_OP_UNBIND: if (ssp >= 0) vars[inst.val] = shadow_val[ssp--]; BOING();
+        
         L_OP_VEC: {
             int32_t size = (int32_t)tos.f;
             if (size >= 1) {
-                int offset = local_array_ptr;
-                int start_idx = sp - size + 1;
+                int offset = local_array_ptr; int start_idx = sp - size + 1;
                 for (int i = 0; i < size; i++) {
                     if (local_array_ptr < 1024) {
                         Val& item = stack[start_idx + i];
@@ -225,13 +209,14 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                 sp -= size; tos.type = 2; tos.v = (offset << 16) | (size & 0xFFFF); 
             } BOING();
         }
+        
         L_OP_ALLOC: {
-            int32_t size = (int32_t)tos.f;
-            if (size > 0) ensure_global_array(size); 
+            int32_t size = (int32_t)tos.f; if (size > 0) ensure_global_array(size); 
             tos.type = 3; tos.f = (float)(global_array_capacity > 0 ? global_array_capacity : size); BOING();
         }
         L_OP_AT: {
-            Val base = tos; int32_t idx = (int32_t)stack[sp--].f;
+            int32_t idx = (int32_t)tos.f;
+            Val base = stack[sp--];
             if (base.type == 2) { 
                 int32_t m = base.v; int off = m >> 16, sz = m & 0xFFFF;
                 if (sz > 0) { if (idx < 0 || idx >= sz) idx = ((idx % sz) + sz) % sz; }
@@ -241,10 +226,13 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             } else if (base.type == 3 && global_array_capacity > 0) { 
                 if (idx < 0 || idx >= global_array_capacity) idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity; 
                 tos.type = 0; tos.f = sanitize(global_array_mem[idx]);
-            } else { tos = {0, 0}; } BOING();
+            } else { tos = {0, 0}; } 
+            BOING();
         }
         L_OP_STORE_AT: {
-            Val base = tos; int32_t idx = (int32_t)stack[sp--].f; Val val_to_s = stack[sp--];
+            Val val_to_s = tos; 
+            int32_t idx = (int32_t)stack[sp--].f; 
+            Val base = stack[sp--];
             if (base.type == 2) { 
                 int32_t m = base.v; int off = m >> 16, sz = m & 0xFFFF;
                 if (sz > 0) { if (idx < 0 || idx >= sz) idx = ((idx % sz) + sz) % sz; }
@@ -253,7 +241,8 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                 if (idx < 0 || idx >= global_array_capacity) idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity;
                 global_array_mem[idx] = sanitize(val_to_s.f); 
             }
-            tos = val_to_s; BOING();
+            tos = val_to_s; 
+            BOING();
         }
         L_OP_SC_AND: { if (inst.val != 0) { if (tos.f == 0.0f) pc += inst.val - 1; else tos = stack[sp--]; } else { if (stack[sp].f == 0.0f) tos = stack[sp--]; else sp--; } BOING(); }
         L_OP_SC_OR: { if (inst.val != 0) { if (tos.f != 0.0f) pc += inst.val - 1; else tos = stack[sp--]; } else { if (stack[sp].f != 0.0f) tos = stack[sp--]; else sp--; } BOING(); }
@@ -313,60 +302,67 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         L_OP_POW_ASSIGN: { float r = fast_pow(vars[inst.val].f, tos.f); tos.f = r; vars[inst.val] = tos; BOING(); }
         
         L_OP_RAND: {
-            static uint32_t x_rng = 123456789;
-            x_rng ^= x_rng << 13;
-            x_rng ^= x_rng >> 17;
-            x_rng ^= x_rng << 5;
-            stack[++sp] = tos;
-            tos.type = 0;
-            tos.f = (float)(x_rng & 0xFFFFFF) / 16777216.0f;
-            BOING();
+            static uint32_t x_rng = 123456789; x_rng ^= x_rng << 13; x_rng ^= x_rng >> 17; x_rng ^= x_rng << 5;
+            stack[++sp] = tos; tos.type = 0; tos.f = (float)(x_rng & 0xFFFFFF) / 16777216.0f; BOING();
         }
 
         L_OP_INT: { tos.f = (float)((int32_t)tos.f); BOING(); }
 
-        L_OP_SUM_PREP: {
-            Val func = tos;
-            Val count = stack[sp--];
-            if (sum_sp < 31) {
-                sum_stack[++sum_sp] = {0.0f, count.f, (int)func.v, 0.0f, sp};
-            }
-            tos.type = 0; tos.f = 0.0f;
-            BOING();
+        L_OP_LOOP_PREP: {
+            int ltype = inst.val; Val func = tos; Val iter = stack[sp--];
+            float limit = 0.0f; Val iterable = {0, 0};
+            if (iter.type == 2) {
+                iterable = iter; limit = (float)(iter.v & 0xFFFF);
+            } else if (iter.type == 3) {
+                iterable = iter; limit = iter.f; 
+            } else { limit = iter.f; }
+            if (loop_sp < 31) { loop_stack[++loop_sp] = {ltype, 0.0f, limit, (int)func.v, 0.0f, sp, iterable, 0.0f}; }
+            tos.type = 0; tos.f = 0.0f; BOING();
         }
         
-        L_OP_SUM_EVAL: {
-            if (sum_sp >= 0) {
-                SumState& s = sum_stack[sum_sp];
+        L_OP_LOOP_EVAL: {
+            if (loop_sp >= 0) {
+                LoopState& s = loop_stack[loop_sp];
                 if (s.i >= s.limit) {
-                    tos.type = 0;
-                    tos.f = s.acc;
-                    sp = s.saved_sp;
-                    sum_sp--;
-                    pc += inst.val - 1;
+                    if (s.type == 0 || s.type == 3) { 
+                        tos.type = 0; tos.f = s.acc; sp = s.saved_sp; loop_sp--; pc += inst.val - 1; BOING(); 
+                    } else { 
+                        tos.type = 0; tos.f = (s.type == 4) ? s.acc : s.limit; // Filter uses acc for array size
+                        loop_sp--; pc += inst.val - 1; goto L_OP_VEC; 
+                    }
                 } else {
-                    s.saved_sp = sp; 
-                    if (csp < 511) { call_stack[++csp] = pc; pc = s.f_pc - 1; }
-                    
-                    stack[++sp].type = 0; stack[sp].f = 0.0f;
-                    tos.type = 0; tos.f = s.i; 
+                    s.saved_sp = sp; if (csp < 511) { call_stack[++csp] = pc; pc = s.f_pc - 1; }
+                    float val = s.i; 
+                    if (s.iterable.type != 0) { 
+                        int32_t idx = (int32_t)s.i;
+                        if (s.iterable.type == 2) {
+                            int off = s.iterable.v >> 16, sz = s.iterable.v & 0xFFFF;
+                            if (idx >= 0 && idx < sz && off + idx < 1024) val = local_array_mem[off + idx];
+                        } else if (s.iterable.type == 3) {
+                            if (idx >= 0 && idx < global_array_capacity) val = global_array_mem[idx];
+                        }
+                    }
+                    s.current_val = val; 
+                    stack[++sp].type = 0; stack[sp].f = (s.type == 3) ? s.acc : 0.0f; // Push dummy OR accumulator
+                    tos.type = 0; tos.f = val; 
                 }
-            } else {
-                tos.type = 0; tos.f = 0.0f;
-            }
-            BOING();
+            } else { tos.type = 0; tos.f = 0.0f; } BOING();
         }
         
-        L_OP_SUM_DONE: {
-            if (sum_sp >= 0) {
-                SumState& s = sum_stack[sum_sp];
-                s.acc += tos.f; 
-                s.i += 1.0f;
-                sp = s.saved_sp;
-                pc -= inst.val - 1;     
+        L_OP_LOOP_DONE: {
+            if (loop_sp >= 0) {
+                LoopState& s = loop_stack[loop_sp];
+                if (s.type == 0) { s.acc += tos.f; sp = s.saved_sp; } // SUM (C++ Optimised addition)
+                else if (s.type == 3) { s.acc = tos.f; sp = s.saved_sp; } // REDUCE (Lambda-driven accumulator update)
+                else if (s.type == 4) { // FILTER (Dynamic dropping)
+                    sp = s.saved_sp; 
+                    if (tos.f != 0.0f) { stack[++sp].type = 0; stack[sp].f = s.current_val; s.acc += 1.0f; }
+                }
+                else { sp = s.saved_sp; stack[++sp] = tos; } // GEN & MAP (1:1 Repacking)
+                
+                s.i += 1.0f; pc -= inst.val - 1;     
             }
-            tos.type = 0; tos.f = 0.0f;
-            BOING();
+            tos.type = 0; tos.f = 0.0f; BOING();
         }
 
         L_DEFAULT: BOING();
@@ -382,8 +378,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             else { out = (float)sz; }
         } else { out = tos.f; }
         if (!is_bb) {
-            out = sanitize(out);
-            if (out < -1.0f) out = -1.0f; if (out > 1.0f) out = 1.0f;
+            out = sanitize(out); if (out < -1.0f) out = -1.0f; if (out > 1.0f) out = 1.0f;
             out_buf[sample_idx] = (uint8_t)((out + 1.0f) * 127.5f);
         } else if (tos.type != 2 && tos.type != 3) {
             out_buf[sample_idx] = (uint8_t)((int32_t)sanitize(out) & 255); 

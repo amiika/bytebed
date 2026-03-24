@@ -1,5 +1,6 @@
 #pragma once
 #include "state.h"
+#include "fast_math.h"
 
 static inline float getF(int32_t v) { union { int32_t i; float f; } u; u.i = v; return u.f; }
 template <typename T>
@@ -42,11 +43,7 @@ extern int32_t global_array_capacity;
 void clear_global_array();
 void ensure_global_array(int32_t req_size);
 
-void init_vm_math();
-float fast_sin(float x);
-float fast_pow(float a, float b);
-
-extern const MathFunc mathLibrary[20];
+extern const MathFunc mathLibrary[19];
 extern const int mathLibrarySize;
 
 extern const MathFunc shorthands[5];

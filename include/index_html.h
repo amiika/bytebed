@@ -11,10 +11,10 @@ const char* index_html = R"rawliteral(
         #overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000000cc; color: #ffffff; display: flex; flex-direction: column; justify-content: center; align-items: center; font-family: monospace; font-size: min(4vw, 24px); cursor: pointer; z-index: 30; border: 2px solid #00ff00; box-sizing: border-box; border-radius: 12px; transition: opacity 0.3s; }
         .hint { font-size: 12px; color: #888888; margin-top: 15px; text-align: center; padding: 0 10px; }
         
-        #hijack-btn { position: absolute; top: 2%; right: 2%; z-index: 20; background: #000; border: 1px solid; padding: 4px 10px; font-family: monospace; font-size: min(3vw, 14px); cursor: pointer; outline: none; transition: transform 0.1s; }
+        #hijack-btn { position: absolute; top: 2%; right: 2%; z-index: 20; background: #000; border: 1px solid; padding: 4px 10px; font-family: monospace; font-size: min(3vw, 14px); font-weight: bold; cursor: pointer; outline: none; transition: transform 0.1s; }
         #hijack-btn:active { transform: scale(0.95); }
         
-        #editor { position: absolute; bottom: 0; left: 0; width: 100%; z-index: 20; border: none; border-top: 1px solid; resize: none; outline: none; background: #000; font-family: monospace; font-size: min(3.5vw, 18px); padding: 8px 12px; box-sizing: border-box; word-break: break-all; }
+        #editor { position: absolute; bottom: 0; left: 0; width: 100%; z-index: 20; border: none; border-top: 1px solid; resize: none; outline: none; background: #000; font-family: monospace; font-size: min(3.5vw, 18px); font-weight: bold; padding: 8px 12px; box-sizing: border-box; word-break: break-all; caret-shape: block; }
         #editor:focus { border-top: 2px solid; } 
     </style>
 </head>
@@ -31,14 +31,21 @@ const char* index_html = R"rawliteral(
     <script>
         let wasm = null;
         let inputBufferPtr = 0;
-        let state = null; // Hoisted so compileToWASM can access it safely
+        let state = null; 
+        let history_log = []; 
         
+        // --- DECOUPLED JS RING BUFFER ---
+        const VIS_RING_SIZE = 8192;
+        const vis_ring_val = new Uint8Array(VIS_RING_SIZE);
+        const vis_ring_t = new Int32Array(VIS_RING_SIZE);
+        let vis_head = 0;
+        let vis_tail = 0;
+
         WebAssembly.instantiateStreaming(fetch('/bytebed.wasm'), {
             env: { memory: new WebAssembly.Memory({ initial: 256 }) }
         }).then(results => {
             wasm = results.instance.exports;
             
-            // HIGH IMPACT FIX: Run C++ global constructors so std::map and std::vector populate!
             if (wasm._initialize) {
                 wasm._initialize(); 
             } else if (wasm.__wasm_call_ctors) {
@@ -60,14 +67,25 @@ const char* index_html = R"rawliteral(
             view.set(encoded, inputBufferPtr);
             view[inputBufferPtr + encoded.length] = 0; 
             
-            // HIGH IMPACT FIX: Pass the actual RPN mode state, defaulting to false if unknown
             let is_rpn = (state && state.r) ? true : false;
             return wasm.wasm_compile(is_rpn); 
         }
 
-        function executeWASM(t) {
-            if (!wasm) return 128;
-            return wasm.wasm_execute(t);
+        function tickWASM() {
+            let val = 128;
+            if (wasm) {
+                val = wasm.wasm_execute(t_audio);
+            }
+            
+            let next_head = (vis_head + 1) % VIS_RING_SIZE;
+            if (next_head !== vis_tail) {
+                vis_ring_val[vis_head] = val;
+                vis_ring_t[vis_head] = t_audio;
+                vis_head = next_head;
+            }
+            
+            t_audio++;
+            return val;
         }
 
         let audioCtx, audioNode;
@@ -91,8 +109,6 @@ const char* index_html = R"rawliteral(
         bgPixels.fill(0xFF000000); 
 
         let t_audio = 0; 
-        let t_vis = 0;   
-        let target_vis = 0;
         let last_val = 128;
         let is_hijacked = false;
 
@@ -122,6 +138,7 @@ const char* index_html = R"rawliteral(
             const ed = document.getElementById('editor');
             ed.style.color = window.themeColor;
             ed.style.borderTopColor = window.dimColor;
+            ed.style.caretColor = window.themeColor; 
         }
         updateColorLUT(0, 255, 0);
 
@@ -130,7 +147,6 @@ const char* index_html = R"rawliteral(
         document.getElementById('editor').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                this.blur();
                 if (is_hijacked) {
                     updateHijack(); 
                     if (ws.readyState === WebSocket.OPEN) {
@@ -148,14 +164,16 @@ const char* index_html = R"rawliteral(
             if (is_hijacked) {
                 btn.innerText = "STREAM";
                 ed.readOnly = false;
+                ed.value = state ? state.f : ""; 
                 ed.focus();
             } else {
                 btn.innerText = "HIJACK";
                 ed.readOnly = true;
                 ed.blur();
                 if (state) {
-                    ed.value = state.f;
-                    compileToWASM(state.f);
+                    let cp = (state.cp !== undefined) ? state.cp : state.f.length;
+                    ed.value = state.f.substring(0, cp) + '\u258C' + state.f.substring(cp); // Half-block
+                    compileToWASM(state.ef); 
                 }
             }
         };
@@ -167,51 +185,78 @@ const char* index_html = R"rawliteral(
             compileToWASM(ed.value);
         };
 
-        const ws = new WebSocket('ws://' + location.hostname + '/ws'); // Updated to dynamic hostname just in case
+        const ws = new WebSocket('ws://' + location.hostname + '/ws'); 
         
         ws.onmessage = function(event) {
             try {
                 let newState = JSON.parse(event.data);
+                let oldState = state;
+                state = newState; 
                 
-                if (state && (state.v !== newState.v || state.s !== newState.s || state.r !== newState.r)) {
+                if (oldState && (oldState.v !== state.v || oldState.s !== state.s || oldState.r !== state.r)) {
                     bgPixels.fill(0xFF000000); 
                     bgCtx.putImageData(bgImg, 0, 0);
                 }
                 
-                if (!state || state.r !== newState.r || state.g !== newState.g || state.b !== newState.b) {
-                    updateColorLUT(newState.r, newState.g, newState.b);
+                if (!oldState || oldState.r !== state.r || oldState.g !== state.g || oldState.b !== state.b) {
+                    updateColorLUT(state.r, state.g, state.b);
                     document.getElementById('screen-container').style.boxShadow = '0 0 30px ' + window.shadowColor;
                     document.getElementById('overlay').style.borderColor = window.themeColor;
+                }
+                
+                if (!oldState || oldState.pm !== state.pm) {
+                    if (wasm && wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(state.pm);
+                }
+                if (oldState && oldState.sr !== state.sr) {
+                    if (wasm && wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(state.sr);
+                    if (c) { 
+                        c.close(); c = null; 
+                        setTimeout(() => document.getElementById('overlay').click(), 10); 
+                    }
                 }
 
                 if (!is_hijacked) {
                     let ed = document.getElementById('editor');
                     
-                    if (!state || state.f !== newState.f) {
-                        ed.value = newState.f;
-                        // State is assigned below, but compileToWASM uses it, so we temporarily assign it here too
-                        state = newState; 
-                        compileToWASM(newState.f);
+                    if (!oldState || oldState.f !== state.f || oldState.cp !== state.cp) {
+                        let cp = (state.cp !== undefined) ? state.cp : state.f.length;
+                        ed.value = state.f.substring(0, cp) + '\u258C' + state.f.substring(cp); // Half-block
                     }
                     
-                    let input_h = newState.f.length > 80 ? 60 : 25;
+                    if (!oldState || oldState.ef !== state.ef) {
+                        compileToWASM(state.ef); 
+                        if (history_log[0] !== state.ef) {
+                            history_log.unshift(state.ef);
+                            if (history_log.length > 10) history_log.pop();
+                        }
+                    }
+                    
+                    let input_h = state.f.length > 80 ? 60 : 25;
                     ed.style.height = (input_h / 135 * 100) + '%';
                 }
 
-                if (c) {
+                if (!c || c.state === 'suspended') {
+                    let target_audio_t = state.t;
+                    if (t_audio < target_audio_t) {
+                        let catchup = target_audio_t - t_audio;
+                        if (catchup > 8192) t_audio = target_audio_t - 8192; 
+                        while (t_audio < target_audio_t) {
+                            tickWASM(); 
+                        }
+                    }
+                } else {
                     let os_latency = (c.baseLatency || 0.03) + (c.outputLatency || 0.05);
                     let network_flight_time = 0.05; 
-                    let buffer_latency = 1024 / 8000;
-                    LATENCY_SAMPLES = Math.floor((os_latency + network_flight_time + buffer_latency) * 8000);
+                    let cur_rate = (state && state.sr) ? state.sr : 8000;
+                    let buffer_latency = 1024 / cur_rate;
+                    LATENCY_SAMPLES = Math.floor((os_latency + network_flight_time + buffer_latency) * cur_rate);
+
+                    let target_audio_t = state.t + LATENCY_SAMPLES;
+                    if (Math.abs(t_audio - target_audio_t) > 4000) {
+                        t_audio = target_audio_t;
+                    }
                 }
 
-                let target_audio_t = newState.t + LATENCY_SAMPLES;
-                if (Math.abs(t_audio - target_audio_t) > 2000) {
-                    t_audio = target_audio_t;
-                }
-                
-                target_vis = newState.t; 
-                state = newState;
             } catch(e) {} 
         };
         
@@ -224,21 +269,20 @@ const char* index_html = R"rawliteral(
             setTimeout(() => this.style.display = 'none', 300);
             
             if(!c) {
-                c = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 8000 });
+                let current_rate = (state && state.sr) ? state.sr : 8000;
+                c = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: current_rate });
                 
                 n = c.createScriptProcessor(1024, 1, 1);
                 n.onaudioprocess = function(e) {
                     let out = e.outputBuffer.getChannelData(0);
                     for (let i=0; i<out.length; i++) {
-                        out[i] = (state && state.p) ? ((executeWASM(t_audio)) - 128) / 128.0 : 0;
-                        t_audio++; 
+                        out[i] = (state && state.p) ? ((tickWASM()) - 128) / 128.0 : 0;
                     }
                 };
                 n.connect(c.destination);
                 
                 if (state) {
                     t_audio = state.t + LATENCY_SAMPLES;
-                    t_vis = state.t;
                 }
             }
             if(c.state === 'suspended') c.resume();
@@ -259,23 +303,19 @@ const char* index_html = R"rawliteral(
             }
             let vis_y = 21, input_y = 135 - input_h, vis_h = input_y - vis_y;
 
-            if (state.p && state.v !== 4 && target_vis > t_vis) {
-                if (target_vis - t_vis > 8000) {
-                    t_vis = target_vis - (240 * scale_pow); 
-                    bgPixels.fill(0xFF000000); 
-                }
-
-                let chunk_end = target_vis;
-                if (target_vis - t_vis > 800) {
-                    chunk_end = t_vis + 800;
-                }
-                
+            if (state.p && state.v !== 4) {
                 let drawn = false;
-                while (t_vis < chunk_end) {
-                    let val = executeWASM(t_vis);
-                    let x = Math.floor(t_vis / scale_pow) % w;
+                let processed = 0;
+                
+                while (vis_tail !== vis_head && processed < 4000) {
+                    let val = vis_ring_val[vis_tail];
+                    let t_v = vis_ring_t[vis_tail];
+                    vis_tail = (vis_tail + 1) % VIS_RING_SIZE;
+                    processed++;
+
+                    let x = Math.floor(t_v / scale_pow) % w;
                     
-                    if (t_vis % scale_pow === 0) {
+                    if (t_v % scale_pow === 0) {
                         let clrX = (x + 1) % w;
                         for(let y = vis_y; y < input_y; y++) bgPixels[y * w + clrX] = 0xFF000000; 
                     }
@@ -293,7 +333,7 @@ const char* index_html = R"rawliteral(
                     }
                     else if (state.v === 2) { 
                         let dSize = Math.max(1, Math.floor(256 / scale_pow)); 
-                        let rS = dSize * (t_vis % scale_pow);
+                        let rS = dSize * (t_v % scale_pow);
                         let c32 = colorLUT32[val];
                         if (rS < vis_h) {
                             for(let y = vis_y + rS; y < vis_y + rS + dSize; y++) {
@@ -310,9 +350,13 @@ const char* index_html = R"rawliteral(
                         for(let y = minY; y <= maxY; y++) bgPixels[y * w + x] = c32;
                     }
                     last_val = val;
-                    t_vis++;
                     drawn = true;
                 }
+                
+                if (vis_tail !== vis_head && processed >= 4000) {
+                    vis_tail = vis_head; 
+                }
+                
                 if (drawn) bgCtx.putImageData(bgImg, 0, 0); 
             }
 
@@ -326,6 +370,15 @@ const char* index_html = R"rawliteral(
                 mainCtx.fillStyle = window.dimColor;
                 mainCtx.font = FONT_SMALL;
                 mainCtx.fillText("HISTORY LOG VISIBLE ON DEVICE", 5 * SC, 40 * SC);
+                
+                mainCtx.fillStyle = window.themeColor;
+                mainCtx.textBaseline = 'top';
+                for (let i = 0; i < history_log.length; i++) {
+                    let line = (i === 0 ? "> " : "  ") + history_log[i];
+                    if (line.length > 38) line = line.substring(0, 36) + "..";
+                    mainCtx.fillText(line, 5 * SC, (50 + (i * 10)) * SC);
+                }
+                vis_tail = vis_head; 
             }
 
             mainCtx.fillStyle = '#000000';

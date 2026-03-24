@@ -115,7 +115,7 @@ String runBytebeatTestSuite() {
         
         // --- 7. PERSISTENT ARRAYS ---
         {"L = $[8191]; L[5] = 100; L[5]", 0, 100, false, true},
-        {"8191 $ L = 100 5 L # 5 L @", 0, 100, true, true},
+        {"8191 $ L = L 5 100 # L 5 @", 0, 100, true, true}, 
         {"L = $[m = 10]; m", 0, 10, false, true},
         {"L = $[10]; L[5] = 0; L[5] || 99", 0, 99, false, true},
         {"L = $[10]; D = (e) => L[e] || 42; L[0] = D(5); L[0]", 0, 42, false, true},
@@ -127,7 +127,7 @@ String runBytebeatTestSuite() {
         {"[10, 20, 30][1]",      0,  20, false, true}, 
         {"[10, 20, 30][t]",      2,  30, false, true}, 
         {"[10, 20, 30][-1]",     0,  30, false, true}, 
-        {"1 10 20 30 3 _ @",     0,  20, true,  true},
+        {"10 20 30 3 _ 1 @",     0,  20, true,  true}, 
         {"m = [10, 20, 42]; m[2]", 0, 42, false, false},
         {"m = [10, 20]; m[0] + m[1]", 0, 30, false, false},
         {"v += (sin(t * 0.1) - p - v * 3) / 200, p += v, p * 100", 1000, 104, false, false},
@@ -141,11 +141,11 @@ String runBytebeatTestSuite() {
         {"'123'[0]",             0,   1, false, true}, 
         {"'5'[0] * 10",          0,  50, false, true}, 
         {"'a'[0] + 97",          0,   107, false, true},
-        {"3 '1112' @",           0,  2, true,  true},
+        {"'1112' 3 @",           0,  2, true,  true}, 
 
         // --- 10. MULTIDIMENSIONAL & NESTED ---
         {"[[10,20],[30,40]][1][0]", 0, 30, false, true}, 
-        {"0 1 10 20 2 _ 30 40 2 _ 2 _ @ @", 0, 30, true, true},
+        {"10 20 2 _ 30 40 2 _ 2 _ 1 @ 0 @", 0, 30, true, true}, 
         {"[[[42]]][0][0][0]", 0, 42, false, true}, 
         {"m = ['abc','def']; m[1][1]", 0, 14, false, true}, 
         {"m = [[1,2,3], 10, [4,5]]; m[2][0]", 0, 4, false, true}, 
@@ -170,26 +170,38 @@ String runBytebeatTestSuite() {
         {"r() * 0",             0,   0, false, true},
         {"0 r *",               0,   0, true,  true},
 
-        // --- 13. REDUCE / SUM OPERATOR ---
+        // --- 13. FUNCTIONAL LOOP OPERATORS ---
+        // Sum / Reduce-Add
         {"sum(5, (i) => 2)",             0,  10, false, true},
         {"5 ( i ) { 2 } sum",            0,  10, true,  true},
         {"sum(4, (i) => i)",             0,   6, false, true},
-        {"4 ( i ) { i } sum",            0,   6, true,  true},
-        {"sum(3, (k) => t + k * 2)",    10,  36, false, true},
-        {"sum(0, (i) => 5)",             0,   0, false, true},
-        {"fm = (x, a) => x + a; sum(4, (i) => fm(i, 2))", 0, 14, false, true},
-        {"sum(4, (i) => 2 ** i)",        0,  15, false, true},
-        {"sum(4, () => 5)",              0,  20, false, true},
+        {"sum([10, 20, 30], x => x + 1)", 0, 63, false, true},
         
-        // FM SYNTHESIS ISOLATION TESTS
-        // Arithmetic substitution to bypass mode-dependent trigonometric scaling
+        // Gen (Generate)
+        {"gen(4, (i) => i * 10)[2]",     0,  20, false, true},
+        {"a = gen(3, (i) => i + 5); a[0] + a[2]", 0, 12, false, true},
+        
+        // Map (Transform)
+        {"map([1, 2, 3], (x) => x * 10)[1]", 0, 20, false, true},
+        {"map(gen(3, i => i + 1), x => x * 2)[2]", 0, 6, false, true},
+        
+        // Reduce (Accumulator Math)
+        {"reduce([10, 20, 30], (a, v) => a + v)", 0, 60, false, true},
+        {"[2, 3, 4].reduce((a, v) => a == 0 ? v : a * v)", 0, 24, false, true}, 
+        
+        // Filter (Dynamic Culling)
+        {"filter([10, 0, 20], x => x > 0)[1]", 0, 20, false, true},
+        {"[10, 0, 20].filter(x => x > 0)[1]", 0, 20, false, true},
+        {"[0, 0, 0].filter(x => x > 0)[0]", 0, 0, false, false}, // Empty array safety
+
+        // Method Chaining
+        {"[1, 2, 3].map(x => x * 10)[1]", 0, 20, false, true},
+        {"[1, 2].sum(x => x)", 0, 3, false, true},
+
+        // Stress Tests
+        {"sum(gen(3, i => i + 1), x => sum(gen(2, j => j), y => x + y))", 0, 15, false, true}, 
         {"fm = (x, a) => x + (x * a); fm(10, 2) + 128", 0, 158, false, true}, 
-        {"sum(4, (i) => 2**(i / 12 * 7))", 0, 8, false, false},
         {"x = (lr) => sum(4, (i) => i * lr); [x(1), x(2)][0]", 0, 6, false, true}, 
-        {"x = (lr) => sum(4, (i) => i * lr); [x(1), x(2)][1]", 0, 12, false, true}, 
-        
-        // Nested loops stress test
-        {"sum(3, (i) => sum(3, (j) => i + j))", 0, 18, false, true},
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);

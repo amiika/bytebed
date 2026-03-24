@@ -7,9 +7,9 @@ bool validateProgram(uint8_t bank, int len) {
     
     for(int i=0; i<len; i++) {
         OpCode op = program_bank[bank][i].op;
-        if (op == OP_JMP || op == OP_PUSH_FUNC || op == OP_SC_AND || op == OP_SC_OR || op == OP_SUM_EVAL || op == OP_SUM_DONE) {
+        if (op == OP_JMP || op == OP_PUSH_FUNC || op == OP_SC_AND || op == OP_SC_OR || op == OP_LOOP_EVAL || op == OP_LOOP_DONE) {
             int target_pc = i + program_bank[bank][i].val;
-            if (op == OP_SUM_DONE) target_pc = i - program_bank[bank][i].val;
+            if (op == OP_LOOP_DONE) target_pc = i - program_bank[bank][i].val;
             if (program_bank[bank][i].val != 0 && (target_pc < 0 || target_pc > len)) return false;
         }
     }
@@ -18,8 +18,10 @@ bool validateProgram(uint8_t bank, int len) {
     static int32_t c_stack[512]; int csp = -1;
     static Val l_vars[64];
     static Val l_shadow_val[512]; int l_ssp = -1;
-    int v_sum_pcs[16];
-    int v_sum_ptr = -1;
+    
+    int v_loop_pcs[16];
+    int v_loop_types[16];
+    int v_loop_ptr = -1;
 
     memset(l_vars, 0, sizeof(l_vars));
 
@@ -95,33 +97,51 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_AT: if (sp >= 1) { sp--; v_stack[sp].type = 0; } break;
             case OP_STORE_AT: if (sp >= 2) { sp -= 2; v_stack[sp].type = 0; } break;
             
-            case OP_SUM_PREP:
+            case OP_LOOP_PREP: {
                 if (sp < 1) return false;
                 if (v_stack[sp].type == 1) {
-                    if (v_sum_ptr < 15) v_sum_pcs[++v_sum_ptr] = v_stack[sp].v;
+                    if (v_loop_ptr < 15) {
+                        v_loop_ptr++;
+                        v_loop_pcs[v_loop_ptr] = v_stack[sp].v;
+                        v_loop_types[v_loop_ptr] = inst.val;
+                    }
                 } else {
-                    if (v_sum_ptr < 15) v_sum_pcs[++v_sum_ptr] = -1;
+                    if (v_loop_ptr < 15) {
+                        v_loop_ptr++;
+                        v_loop_pcs[v_loop_ptr] = -1;
+                        v_loop_types[v_loop_ptr] = inst.val;
+                    }
                 }
                 sp -= 2; 
                 break;
+            }
             
-            case OP_SUM_EVAL:
-                sp++; v_stack[sp].type = 0; 
-                if (v_sum_ptr >= 0 && v_sum_pcs[v_sum_ptr] != -1) {
+            case OP_LOOP_EVAL: {
+                sp++; 
+                if (v_loop_ptr >= 0 && v_loop_pcs[v_loop_ptr] != -1) {
+                    v_stack[sp].type = 0; 
                     if (csp < 511) {
                         c_stack[++csp] = pc; 
-                        pc = v_sum_pcs[v_sum_ptr] - 1; 
-                        v_sum_pcs[v_sum_ptr] = -1; // Mark as visited
+                        pc = v_loop_pcs[v_loop_ptr] - 1; 
+                        v_loop_pcs[v_loop_ptr] = -1; 
                     } else return false;
+                } else {
+                    int ltype = (v_loop_ptr >= 0) ? v_loop_types[v_loop_ptr] : 0;
+                    v_stack[sp].type = (ltype == 0 || ltype == 3) ? 0 : 2; 
                 }
                 break;
+            }
                 
-            case OP_SUM_DONE:
-                if (sp < 0) return false;
+            case OP_LOOP_DONE: {
+                if (sp < 0) return false; 
                 sp--; 
-                sp++; v_stack[sp].type = 0; 
-                if (v_sum_ptr >= 0) v_sum_ptr--;
+                int ltype = (v_loop_ptr >= 0) ? v_loop_types[v_loop_ptr] : 0;
+                sp++; 
+                if (ltype == 0 || ltype == 3) { v_stack[sp].type = 0; }
+                else { v_stack[sp].type = 2; } 
+                if (v_loop_ptr >= 0) v_loop_ptr--; 
                 break;
+            }
 
             case OP_SC_AND: case OP_SC_OR:
                 if (inst.val != 0) { if (sp >= 0) sp--; } break;
