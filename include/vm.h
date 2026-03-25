@@ -64,3 +64,6 @@ String decompile(bool to_rpn);
 bool validateProgram(uint8_t bank, int len);
 void execute_vm_block(int32_t start_t, int length, uint8_t* out_buf);
 uint8_t execute_vm(int32_t t);
+
+void updateIMUVars(float ax, float ay, float az, float gx, float gy, float gz);
+void updateMouseVars(float mx, float my, float mv);

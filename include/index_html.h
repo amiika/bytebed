@@ -5,7 +5,7 @@ const char* index_html = R"rawliteral(
     <title>Bytebed - Firmly Embedded Bytebeats</title>
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
     <style>
-        body { background: #050505; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        body { background: #050505; display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100vh; margin: 0; touch-action: none; }
         #screen-container { position: relative; width: 100vw; max-width: 960px; aspect-ratio: 240/135; box-shadow: 0 0 30px #00ff0026; border-radius: 12px; overflow: hidden; }
         canvas { width: 100%; height: 100%; background: #000000; }
         #overlay { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: #000000cc; color: #ffffff; display: flex; flex-direction: column; justify-content: center; align-items: center; font-family: monospace; font-size: min(4vw, 24px); cursor: pointer; z-index: 30; border: 2px solid #00ff00; box-sizing: border-box; border-radius: 12px; transition: opacity 0.3s; }
@@ -34,24 +34,20 @@ const char* index_html = R"rawliteral(
         let state = null; 
         let history_log = []; 
         
-        // --- DECOUPLED JS RING BUFFER ---
         const VIS_RING_SIZE = 8192;
         const vis_ring_val = new Uint8Array(VIS_RING_SIZE);
         const vis_ring_t = new Int32Array(VIS_RING_SIZE);
         let vis_head = 0;
         let vis_tail = 0;
 
+        let local_imu_available = false;
+
         WebAssembly.instantiateStreaming(fetch('/bytebed.wasm'), {
             env: { memory: new WebAssembly.Memory({ initial: 256 }) }
         }).then(results => {
             wasm = results.instance.exports;
-            
-            if (wasm._initialize) {
-                wasm._initialize(); 
-            } else if (wasm.__wasm_call_ctors) {
-                wasm.__wasm_call_ctors(); 
-            }
-
+            if (wasm._initialize) { wasm._initialize(); } 
+            else if (wasm.__wasm_call_ctors) { wasm.__wasm_call_ctors(); }
             inputBufferPtr = wasm.get_input_buffer();
             document.getElementById('loading-txt').innerText = "BYTE ME!";
         }).catch(err => {
@@ -73,9 +69,7 @@ const char* index_html = R"rawliteral(
 
         function tickWASM() {
             let val = 128;
-            if (wasm) {
-                val = wasm.wasm_execute(t_audio);
-            }
+            if (wasm) { val = wasm.wasm_execute(t_audio); }
             
             let next_head = (vis_head + 1) % VIS_RING_SIZE;
             if (next_head !== vis_tail) {
@@ -83,7 +77,6 @@ const char* index_html = R"rawliteral(
                 vis_ring_t[vis_head] = t_audio;
                 vis_head = next_head;
             }
-            
             t_audio++;
             return val;
         }
@@ -147,12 +140,7 @@ const char* index_html = R"rawliteral(
         document.getElementById('editor').addEventListener('keydown', function(e) {
             if (e.key === 'Enter') {
                 e.preventDefault();
-                if (is_hijacked) {
-                    updateHijack(); 
-                    if (ws.readyState === WebSocket.OPEN) {
-                        ws.send('E' + this.value); 
-                    }
-                }
+                if (is_hijacked) { updateHijack(); }
             }
         });
 
@@ -172,7 +160,7 @@ const char* index_html = R"rawliteral(
                 ed.blur();
                 if (state) {
                     let cp = (state.cp !== undefined) ? state.cp : state.f.length;
-                    ed.value = state.f.substring(0, cp) + '\u258C' + state.f.substring(cp); // Half-block
+                    ed.value = state.f.substring(0, cp) + '\u258C' + state.f.substring(cp); 
                     compileToWASM(state.ef); 
                 }
             }
@@ -185,6 +173,43 @@ const char* index_html = R"rawliteral(
             compileToWASM(ed.value);
         };
 
+        function handleMotion(event) {
+            if (event.accelerationIncludingGravity && event.accelerationIncludingGravity.x !== null) {
+                local_imu_available = true;
+            }
+            
+            if (!is_hijacked || !local_imu_available || !wasm || !wasm.wasm_set_imu) return; 
+            
+            let local_ax = 0, local_ay = 0, local_az = 0;
+            let local_gx = 0, local_gy = 0, local_gz = 0;
+            
+            if (event.accelerationIncludingGravity) {
+                local_ax = (event.accelerationIncludingGravity.x || 0) / 9.81;
+                local_ay = (event.accelerationIncludingGravity.y || 0) / 9.81;
+                local_az = (event.accelerationIncludingGravity.z || 0) / 9.81;
+            }
+            if (event.rotationRate) {
+                local_gx = event.rotationRate.alpha || 0;
+                local_gy = event.rotationRate.beta || 0;
+                local_gz = event.rotationRate.gamma || 0;
+            }
+            
+            wasm.wasm_set_imu(local_ax, local_ay, local_az, local_gx, local_gy, local_gz);
+        }
+
+        // --- Unified Pointer Handler ---
+        function handlePointer(clientX, clientY) {
+            if (!is_hijacked || !wasm || !wasm.wasm_set_mouse) return;
+            let mx = clientX / window.innerWidth;
+            let my = clientY / window.innerHeight;
+            wasm.wasm_set_mouse(mx, my);
+        }
+
+        window.addEventListener('pointermove', (e) => {
+            if (!e.isPrimary) return; 
+            handlePointer(e.clientX, e.clientY);
+        });
+
         const ws = new WebSocket('ws://' + location.hostname + '/ws'); 
         
         ws.onmessage = function(event) {
@@ -193,6 +218,20 @@ const char* index_html = R"rawliteral(
                 let oldState = state;
                 state = newState; 
                 
+                if (state.ax !== undefined) {
+                    let override_with_local = is_hijacked && local_imu_available;
+                    if (!override_with_local && wasm && wasm.wasm_set_imu) {
+                        wasm.wasm_set_imu(state.ax, state.ay, state.az, state.gx, state.gy, state.gz);
+                    }
+                }
+
+                if (state.mx !== undefined) {
+                    let override_with_local = is_hijacked;
+                    if (!override_with_local && wasm && wasm.wasm_set_mouse) {
+                        wasm.wasm_set_mouse(state.mx, state.my);
+                    }
+                }
+
                 if (oldState && (oldState.v !== state.v || oldState.s !== state.s || oldState.r !== state.r)) {
                     bgPixels.fill(0xFF000000); 
                     bgCtx.putImageData(bgImg, 0, 0);
@@ -267,6 +306,17 @@ const char* index_html = R"rawliteral(
             
             this.style.opacity = '0';
             setTimeout(() => this.style.display = 'none', 300);
+
+            if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+                try {
+                    const permission = await DeviceMotionEvent.requestPermission();
+                    if (permission === 'granted') {
+                        window.addEventListener('devicemotion', handleMotion);
+                    }
+                } catch (e) { console.warn("IMU Permission Denied", e); }
+            } else {
+                window.addEventListener('devicemotion', handleMotion);
+            }
             
             if(!c) {
                 let current_rate = (state && state.sr) ? state.sr : 8000;

@@ -53,9 +53,26 @@ void clear_global_array() {
     }
 }
 
-inline float encode_vec(int32_t v) { uint32_t u = (uint32_t)v | 0x80000000; return *(float*)&u; }
-inline bool is_vec_tag(float f) { return (*(uint32_t*)&f & 0x80000000) != 0; }
-inline int32_t decode_vec(float f) { return (int32_t)(*(uint32_t*)&f & 0x7FFFFFFF); }
+// --- THE PERFECT 27-BIT ARRAY TAG FIX ---
+// Uses Exponent 240 (0x78000000). Leaves 27 bits for metadata!
+// Perfectly preserves (offset << 16 | size) for nested arrays.
+inline float encode_vec(int32_t v) { 
+    union { float f; uint32_t i; } u;
+    u.i = 0x78000000 | (v & 0x07FFFFFF); 
+    return u.f; 
+}
+
+inline bool is_vec_tag(float f) { 
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    return (u.i & 0xF8000000) == 0x78000000; 
+}
+
+inline int32_t decode_vec(float f) { 
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    return (int32_t)(u.i & 0x07FFFFFF); 
+}
 
 inline float sanitize(float f) {
     union { float f; uint32_t i; } u;
@@ -389,4 +406,21 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
 
 uint8_t IRAM_ATTR execute_vm(int32_t t) {
     uint8_t out; execute_vm_block(t, 1, &out); return out;
+}
+
+// --- IMU Data Injector Implementation ---
+void updateIMUVars(float ax, float ay, float az, float gx, float gy, float gz) {
+    int i_ax = getVarId("ax"); vars[i_ax].type = 0; vars[i_ax].f = sanitize(ax);
+    int i_ay = getVarId("ay"); vars[i_ay].type = 0; vars[i_ay].f = sanitize(ay);
+    int i_az = getVarId("az"); vars[i_az].type = 0; vars[i_az].f = sanitize(az);
+    int i_gx = getVarId("gx"); vars[i_gx].type = 0; vars[i_gx].f = sanitize(gx);
+    int i_gy = getVarId("gy"); vars[i_gy].type = 0; vars[i_gy].f = sanitize(gy);
+    int i_gz = getVarId("gz"); vars[i_gz].type = 0; vars[i_gz].f = sanitize(gz);
+}
+
+// --- Mouse Data Injector Implementation ---
+void updateMouseVars(float mx, float my, float mv) {
+    int i_mx = getVarId("mx"); vars[i_mx].type = 0; vars[i_mx].f = sanitize(mx);
+    int i_my = getVarId("my"); vars[i_my].type = 0; vars[i_my].f = sanitize(my);
+    int i_mv = getVarId("mv"); vars[i_mv].type = 0; vars[i_mv].f = sanitize(mv);
 }

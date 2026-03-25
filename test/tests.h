@@ -171,37 +171,37 @@ String runBytebeatTestSuite() {
         {"0 r *",               0,   0, true,  true},
 
         // --- 13. FUNCTIONAL LOOP OPERATORS ---
-        // Sum / Reduce-Add
         {"sum(5, (i) => 2)",             0,  10, false, true},
         {"5 ( i ) { 2 } sum",            0,  10, true,  true},
         {"sum(4, (i) => i)",             0,   6, false, true},
         {"sum([10, 20, 30], x => x + 1)", 0, 63, false, true},
-        
-        // Gen (Generate)
         {"gen(4, (i) => i * 10)[2]",     0,  20, false, true},
         {"a = gen(3, (i) => i + 5); a[0] + a[2]", 0, 12, false, true},
-        
-        // Map (Transform)
         {"map([1, 2, 3], (x) => x * 10)[1]", 0, 20, false, true},
         {"map(gen(3, i => i + 1), x => x * 2)[2]", 0, 6, false, true},
-        
-        // Reduce (Accumulator Math)
         {"reduce([10, 20, 30], (a, v) => a + v)", 0, 60, false, true},
         {"[2, 3, 4].reduce((a, v) => a == 0 ? v : a * v)", 0, 24, false, true}, 
-        
-        // Filter (Dynamic Culling)
         {"filter([10, 0, 20], x => x > 0)[1]", 0, 20, false, true},
         {"[10, 0, 20].filter(x => x > 0)[1]", 0, 20, false, true},
-        {"[0, 0, 0].filter(x => x > 0)[0]", 0, 0, false, false}, // Empty array safety
-
-        // Method Chaining
+        {"[0, 0, 0].filter(x => x > 0)[0]", 0, 0, false, false}, 
         {"[1, 2, 3].map(x => x * 10)[1]", 0, 20, false, true},
         {"[1, 2].sum(x => x)", 0, 3, false, true},
-
-        // Stress Tests
         {"sum(gen(3, i => i + 1), x => sum(gen(2, j => j), y => x + y))", 0, 15, false, true}, 
         {"fm = (x, a) => x + (x * a); fm(10, 2) + 128", 0, 158, false, true}, 
         {"x = (lr) => sum(4, (i) => i * lr); [x(1), x(2)][0]", 0, 6, false, true}, 
+
+        // --- 14. NEGATIVE ARRAYS & MATH STRESS TESTS ---
+        {"[-10, -20][-1]",             0, 236, false, true}, // Bytebeat maps -20 to 236
+        {"[-10, -20][1]",              0, 236, false, true}, 
+        {"m = [-5, -15]; m[0] + m[1]", 0, 236, false, false}, // -20 -> 236
+        {"[[-1, -2], [-3, -4]][0][1]", 0, 254, false, true}, // -2 -> 254
+        {"[[-1, -2], [-3, -4]][1][0]", 0, 253, false, true}, // -3 -> 253
+        {"(-10) * (-2)",               0,  20, false, true},
+        {"-10 / -2",                   0,   5, false, true},
+        {"a = -5; b = -5; a + b",      0, 246, false, true}, 
+        {"[-5, 5].reduce((a,v) => a + v)", 0, 0, false, true}, 
+        {"[-5, -5].map(x => x * -2)[0]",   0, 10, false, true}, 
+        {"2 ** -1 * 10",               0,   5, false, true}  // Tests fast_pow negative exponent stability
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);

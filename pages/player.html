@@ -4,54 +4,108 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Bytebed</title>
+    
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bytesized&family=Jersey+10&family=Micro+5&family=VT323&display=swap" rel="stylesheet">
     <style>
-        body { background: #050505; color: #00ff00; font-family: 'Courier New', monospace; margin: 0; display: flex; justify-content: center; align-items: center; height: 100vh; overflow: hidden; cursor: pointer; }
-        #container { position: relative; width: 800px; height: 450px; background: #000; border: 1px solid #111; border-radius: 4px; cursor: default; }
-        canvas { width: 100%; height: 100%; display: block; background: transparent; pointer-events: none; }
+        body { 
+            background: #050505; color: #00ff00; font-family: 'Courier New', monospace; 
+            margin: 0; display: flex; justify-content: center; align-items: center; 
+            height: 100vh; overflow: hidden; 
+        }
         
-        #ui { position: absolute; bottom: 0; left: 0; width: 100%; padding: 25px; box-sizing: border-box; background: linear-gradient(to top, rgba(0,0,0,1) 0%, transparent 100%); display: flex; flex-direction: column; }
-        textarea { width: 100%; background: transparent; color: #00ff00; border: none; font-family: inherit; font-size: 24px; outline: none; resize: none; border-left: 2px solid #004400; padding-left: 15px; overflow: hidden; max-height: 250px; transition: height 0.1s ease-out; }
+        #container { 
+            width: 70%; height: 500px; background: #000; 
+            border: 1px solid #111; border-radius: 4px; 
+            display: flex; flex-direction: column; 
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+        }
+        
+        #header { 
+            display: flex; justify-content: space-between; align-items: center; 
+            padding: 15px; border-bottom: 1px solid #111; background: #050505; 
+        }
+        
+        .meta { 
+            font-family: 'Bytesized', sans-serif; 
+            font-size: 32px; 
+            font-weight: 700; 
+            letter-spacing: 2px; 
+            opacity: 0.9; 
+            margin: 0; 
+            text-shadow: 0 0 10px rgba(0, 255, 0, 0.4);
+        }
+        
+        .controls { 
+            font-family: 'VT323', sans-serif; 
+            display: flex; gap: 8px; font-size: 18px; 
+            align-items: center; flex-wrap: wrap; justify-content: flex-end; 
+        }
+        
+        #viz-wrapper { 
+            flex-grow: 1; position: relative; background: #000; overflow: hidden; cursor: crosshair; touch-action: none;
+        }
+        
+        canvas { width: 100%; height: 100%; display: block; }
+        
+        #ui { padding: 15px; background: #050505; border-top: 1px solid #111; }
+        
+        textarea { 
+            width: 100%; background: transparent; color: #00ff00; border: none; 
+            font-family: 'VT323', sans-serif; font-size: 20px; outline: none; resize: none; 
+            max-height: 150px; 
+        }
 
-        .meta { position: absolute; top: 18px; left: 18px; font-size: 20px; color: #00ff00; letter-spacing: 1px; opacity: 0.8; }
-        .controls { position: absolute; top: 15px; right: 15px; display: flex; gap: 10px; font-size: 10px; align-items: center; }
-        
         .btn { 
             cursor: pointer; user-select: none; transition: all 0.15s ease; white-space: nowrap;
-            color: #00ff00; border: 1px solid #004400;
-            padding: 4px 12px; background: transparent; text-decoration: none;
-            text-transform: uppercase;
-            text-align: center;
-            min-width: 60px;
+            color: #00ff00; border: 1px solid #004400; background: transparent; text-decoration: none;
+            text-transform: uppercase; border-radius: 2px;
+            
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            height: 34px;
+            padding: 0 12px;
+            box-sizing: border-box;
         }
         
         .btn:hover { background: rgba(0,255,0,0.05); border-color: #00ff00; box-shadow: 0 0 8px rgba(0,255,0,0.1); }
-
-        .btn.active { 
-            background: rgba(0,255,0,0.08); 
-            border-color: #00ff00;
-            color: #00ff00;
-            box-shadow: inset 0 0 4px rgba(0,255,0,0.1);
+        .btn.active { background: rgba(0,255,0,0.08); border-color: #00ff00; color: #00ff00; box-shadow: inset 0 0 4px rgba(0,255,0,0.1); }
+        
+        .btn-icon { 
+            width: 34px; 
+            padding: 0; 
+            font-family: Arial, sans-serif; 
+            font-size: 16px; 
+            font-weight: bold; 
         }
     </style>
 </head>
 <body>
     <div id="container">
-        <div class="meta" id="status">BYTEBED</div>
-        
-        <div class="controls">
-            <span id="rate-btn" class="btn" onclick="cycleRate(event)">8000HZ</span>
-            <span id="format-btn" class="btn active" onclick="toggleFormat(event)">BYTEBEAT</span>
-            <span id="play-btn" class="btn" onclick="togglePlay(event)">START</span>
-            <span id="mode-btn" class="btn active" onclick="toggleMode(event)">INFIX</span>
-            <span id="btn-auto" class="btn active" onclick="toggleAuto(event)">AUTO</span>
-            <span class="btn" onclick="resetT(event)">RESET</span>
-            <span id="share-btn" class="btn" onclick="shareCode(event)">SHARE</span>
+        <div id="header">
+            <div class="meta" id="status">BYTEBED</div>
+            <div class="controls">
+                <span id="play-btn" class="btn btn-icon" onclick="togglePlay(event)" title="Play/Pause">▶</span>
+                <span id="stop-btn" class="btn btn-icon" onclick="resetT(event)" title="Stop & Reset">▢</span>
+                <span id="rate-btn" class="btn" onclick="cycleRate(event)">8000HZ</span>
+                <span id="format-btn" class="btn active" onclick="toggleFormat(event)">BYTEBEAT</span>
+                <span class="btn btn-icon" onclick="zoomIn(event)" title="Zoom In">＋</span>
+                <span id="vis-btn" class="btn" onclick="toggleVis(event)">WAVEFORM</span>
+                <span class="btn btn-icon" onclick="zoomOut(event)" title="Zoom Out">－</span>
+                <span id="mode-btn" class="btn active" onclick="toggleMode(event)">INFIX</span>
+                <span id="btn-auto" class="btn active" onclick="toggleAuto(event)">AUTO</span>
+                <span id="share-btn" class="btn btn-icon" onclick="shareCode(event)" title="Share Link">↗</span>
+            </div>
         </div>
 
-        <canvas id="viz"></canvas>
+        <div id="viz-wrapper">
+            <canvas id="viz"></canvas>
+        </div>
 
         <div id="ui">
-            <textarea id="formula" spellcheck="false" placeholder="Shift+Enter for newline...">t * (t >> 8 | t >> 11)</textarea>
+            <textarea id="formula" spellcheck="false" placeholder="...">t * (t >> 8 | t >> 11)</textarea>
         </div>
     </div>
     <script src="emulator.js"></script>

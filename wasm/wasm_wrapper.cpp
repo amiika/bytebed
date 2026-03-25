@@ -29,13 +29,29 @@ extern "C" {
         return last_decomp.c_str();
     }
 
-    // --- Floatbeat & Sample Rate Setters ---
     EMSCRIPTEN_KEEPALIVE void wasm_set_sample_rate(int rate) {
         current_sample_rate = rate;
     }
 
     EMSCRIPTEN_KEEPALIVE void wasm_set_play_mode(int mode) {
         current_play_mode = (PlayMode)mode;
+    }
+
+    // --- Fix for Floatbeat/Bytebeat Type-Tag Persistence ---
+    EMSCRIPTEN_KEEPALIVE void wasm_reset_vm() {
+        var_count = 0;
+        memset(vars, 0, sizeof(vars));
+        clear_global_array();
+    }
+
+    // --- IMU Data Injector ---
+    EMSCRIPTEN_KEEPALIVE void wasm_set_imu(float ax, float ay, float az, float gx, float gy, float gz) {
+        updateIMUVars(ax, ay, az, gx, gy, gz);
+    }
+
+    // --- Mouse Data Injector (Updated with mv) ---
+    EMSCRIPTEN_KEEPALIVE void wasm_set_mouse(float mx, float my, float mv) {
+        updateMouseVars(mx, my, mv);
     }
 }
 

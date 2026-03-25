@@ -23,15 +23,24 @@ static esp_err_t ws_handler(httpd_req_t *req) {
     if (req->method == HTTP_GET) return ESP_OK;
     
     httpd_ws_frame_t ws_pkt;
-    uint8_t buf[2] = {0}; 
     memset(&ws_pkt, 0, sizeof(httpd_ws_frame_t));
     ws_pkt.type = HTTPD_WS_TYPE_TEXT;
+    
+    // Dynamically allocate memory based on incoming frame length to prevent TCP stalling
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK) return ret;
+    if (ws_pkt.len == 0) return ESP_OK;
+
+    uint8_t *buf = (uint8_t*)malloc(ws_pkt.len + 1);
+    if (!buf) return ESP_ERR_NO_MEM;
     ws_pkt.payload = buf;
     
-    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 1);
-    if (ret != ESP_OK) return ret;
+    ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+    if (ret != ESP_OK) { free(buf); return ret; }
+    buf[ws_pkt.len] = '\0'; 
 
-    if (ws_pkt.payload[0] == 'P') {
+    // Process the standard 'P' (Ping) payload request
+    if (buf[0] == 'P') {
         String safe_formula = escapeJSON(input_buffer);
         String eval_formula = escapeJSON(active_eval_formula); 
         String top_text = escapeJSON(current_top_text);
@@ -39,12 +48,21 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         String sm_text = "";
         if (millis() < status_timer && status_msg != "") sm_text = escapeJSON(status_msg);
 
+        float ax = vars[getVarId("ax")].f;
+        float ay = vars[getVarId("ay")].f;
+        float az = vars[getVarId("az")].f;
+        float gx = vars[getVarId("gx")].f;
+        float gy = vars[getVarId("gy")].f;
+        float gz = vars[getVarId("gz")].f;
+        float mx = vars[getVarId("mx")].f;
+        float my = vars[getVarId("my")].f;
+
         char jsonStr[1024]; 
         snprintf(jsonStr, sizeof(jsonStr), 
-                 "{\"f\":\"%s\",\"ef\":\"%s\",\"v\":%d,\"r\":%d,\"g\":%d,\"b\":%d,\"s\":%d,\"p\":%s,\"cp\":%d,\"t\":%ld,\"m\":\"%s\",\"sm\":\"%s\",\"pm\":%d,\"sr\":%d}",
+                 "{\"f\":\"%s\",\"ef\":\"%s\",\"v\":%d,\"r\":%d,\"g\":%d,\"b\":%d,\"s\":%d,\"p\":%s,\"cp\":%d,\"t\":%ld,\"m\":\"%s\",\"sm\":\"%s\",\"pm\":%d,\"sr\":%d,\"ax\":%.3f,\"ay\":%.3f,\"az\":%.3f,\"gx\":%.3f,\"gy\":%.3f,\"gz\":%.3f,\"mx\":%.3f,\"my\":%.3f}",
                  safe_formula.c_str(), eval_formula.c_str(), current_vis, theme.r_base, theme.g_base, theme.b_base, 
                  drawScale, is_playing ? "true" : "false", cursor_pos, (long)t_raw, top_text.c_str(), sm_text.c_str(),
-                 (int)current_play_mode, current_sample_rate);
+                 (int)current_play_mode, current_sample_rate, ax, ay, az, gx, gy, gz, mx, my);
 
         httpd_ws_frame_t ws_text;
         memset(&ws_text, 0, sizeof(httpd_ws_frame_t));
@@ -53,6 +71,8 @@ static esp_err_t ws_handler(httpd_req_t *req) {
         ws_text.len = strlen(jsonStr);
         httpd_ws_send_frame(req, &ws_text);
     }
+
+    free(buf);
     return ESP_OK;
 }
 
