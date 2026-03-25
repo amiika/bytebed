@@ -1,14 +1,69 @@
 #pragma once
-
-#include <Arduino.h>
 #include "state.h"
+#include "fast_math.h"
 
-uint8_t execute_vm(int32_t t);
-String decompile(bool to_rpn);
+static inline float getF(int32_t v) { union { int32_t i; float f; } u; u.i = v; return u.f; }
+template <typename T>
+static inline int32_t setF(T f) { union { int32_t i; float f; } u; u.f = static_cast<float>(f); return u.i; }
 
-bool compileRPN(String input);
-bool compileInfix(String input, bool reset_t);
+struct Instruction {
+    OpCode op;
+    int32_t val;
+};
 
-void saveUndo();
-String getOpSym(OpCode op);
+struct Val {
+    uint8_t type; 
+    union {
+        int32_t v;
+        float f;
+    };
+};
+
+struct MathFunc {
+    const char* name;
+    OpCode code;
+    bool unary;
+};
+
+struct OpInfo {
+    const char* sym;
+    OpCode code;
+    int precedence;
+};
+
+extern Instruction program_bank[2][512];
+extern int prog_len_bank[2];
+extern volatile uint8_t active_bank;
+
+extern Val vars[64];
+extern int var_count;
+
+extern float* global_array_mem;
+extern int32_t global_array_capacity;
+void clear_global_array();
+void ensure_global_array(int32_t req_size);
+
+extern const MathFunc mathLibrary[19];
+extern const int mathLibrarySize;
+
+extern const MathFunc shorthands[5];
+extern const int shorthandsSize;
+
+extern const OpInfo opList[37]; 
+extern const int opListSize;
+
+bool getOpCode(const String& sym, OpCode& outCode);
+int getVarId(String name);
+String getVarName(int id);
+bool isVarDefined(const String& name);
 int getPrecedence(OpCode op);
+String getOpSym(OpCode op);
+bool compileRPN(String input);
+bool compileInfix(String input, bool reset_t = false);
+String decompile(bool to_rpn);
+bool validateProgram(uint8_t bank, int len);
+void execute_vm_block(int32_t start_t, int length, uint8_t* out_buf);
+uint8_t execute_vm(int32_t t);
+
+void updateIMUVars(float ax, float ay, float az, float gx, float gy, float gz);
+void updateMouseVars(float mx, float my, float mv);
