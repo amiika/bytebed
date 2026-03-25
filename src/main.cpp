@@ -18,7 +18,6 @@ volatile bool pending_code_update = false;
 char pending_code_buffer[2048] = {0};
 uint8_t pending_flags = 0;
 
-// Lock-Free UI Decoupling
 #define UI_RING_SIZE 4096
 volatile uint8_t ui_sample_ring[UI_RING_SIZE];
 volatile int32_t ui_t_ring[UI_RING_SIZE];
