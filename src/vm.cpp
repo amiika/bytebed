@@ -53,9 +53,6 @@ void clear_global_array() {
     }
 }
 
-// --- THE PERFECT 27-BIT ARRAY TAG FIX ---
-// Uses Exponent 240 (0x78000000). Leaves 27 bits for metadata!
-// Perfectly preserves (offset << 16 | size) for nested arrays.
 inline float encode_vec(int32_t v) { 
     union { float f; uint32_t i; } u;
     u.i = 0x78000000 | (v & 0x07FFFFFF); 

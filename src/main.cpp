@@ -160,7 +160,7 @@ void uiTask(void *pvParameters) {
         else if (st.alt) snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
         else if (st.ctrl) snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
         else if (st.fn) strncpy(current_top_text, "FN: W/T/S/F/L/M/R/Arr/+-", 63); // Added R here
-        else strncpy(current_top_text, "BYTENATOR", 63); 
+        else strncpy(current_top_text, "BYTEBED", 63); 
         current_top_text[63] = '\0'; 
 
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
@@ -305,8 +305,8 @@ void uiTask(void *pvParameters) {
                         WiFi.persistent(false); 
                         WiFi.mode(WIFI_AP);
                         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-                        if (WiFi.softAP("BYTENATOR")) {
-                            MDNS.begin("bytebeat"); 
+                        if (WiFi.softAP("BYTEBED")) {
+                            MDNS.begin("bytebed"); 
                             is_streaming = true; initBytebeatServer();
                             xTaskCreatePinnedToCore(startDnsHijack, "DNS", 2048, NULL, 1, NULL, 1);
                             status_msg = "WIFI ACTIVE";

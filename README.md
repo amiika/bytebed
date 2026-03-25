@@ -4,26 +4,39 @@ Woop woop. It beeps! Now with functions!
 
 # DONE
 
+Features:
 + Classic C-style bytebeats
 + Infix and RPN compiler & bytecode vm
 + Bytecode decompiler (changes between Infix & RPN via tab)
 + Syntax validator (Prevents crashes)
-+ Load & Save slots opt/alt + 0-9
-+ Undo & Redo ctrl + z / r
-+ Classic visualizations fn + 1-4
-+ History view fn + 0
-+ Theme fn + t
-+ Synced captive wifi portal fn + w
 + Global variables
 + Custom function support
 + Variable chaining and array support
 + Some sort of floatbeat support
+
+Variables & functions:
++ All math: sin/s, cos/c, floor, int, cbrt and constants like pi, e ... etc ...
++ Accelerometer: ax, ay, az
++ Gyroscope: gx, gy, gz
++ Mouse (for wasm): mx, my, mv (velocity)
+
+Controls & Modes:
++ ctrl + 0-9: Select bank (Presets & User patches)
++ opt + 0-9: Load patch from current bank
++ alt + 0-9: Save patch to location
++ ctrl + z/r: Undo & Redo
++ fn + 1-4: Classic visualizations
++ fn + 0: History view
++ fn + t: Change theme color
 + fn + s: Change samplerate
 + fn + f: Toggle bytebeat / floatbeat
++ fn + w: Wifi sync (Captive portal & bytebeat.local)
++ fn + l: Slave mode: Listen (ESP-NOW sync mode)
++ fn + m: Master mode: Sync (ESP-NOW sync mode)
 
-# TODO
+# TODO / IDEAS
 
-- Documentation huh? Maybe just few words about the new function and rpn syntax.
+- Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp.
 
 # Development
 
@@ -44,7 +57,6 @@ pio test -e native
 For more verbose testing:
 
 pio test -e native -v 
-
 
 For testing the hardware:
 
