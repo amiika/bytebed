@@ -1,6 +1,8 @@
+# To be done
 
+These are just random tests recreating and adapting stuff from dollchan examples for now
 
-## Badd
+## arrays
 
 a = [2, 3.26, 2, 2.5, 2.5]; b = [134, 356, 345, 384, 234, 345, 345]; sin(t / 33000 * a[t >> 12 & 3] * b[t >> 16 & 3])
 
@@ -13,7 +15,6 @@ n = [0, 2, 3, 5, 7, 8, 10][(t >> 16 ^ t >> 12) % 6], t * (2 ** (n / 13))
 # sum
 
 P=t*PI/16/2**(t/3e6),f=x=>s(x+s(x)),x=L=>sum(16,i=>f(P*L/2**(i*7/12))*.99995**(t%2**(16+i/8)))/16,[x(1.005),x(.995)]
-
 
 gen(16, i => i + 1)
   .map(h => s(t * h * 0.1 % 16) / h)
@@ -34,7 +35,7 @@ gen(16, i => i + 1)
 
 
 
-REDUCE TESTS:
+# REDUCE TESTS:
 
 
 i = floor(t/22050) % 16,
@@ -68,7 +69,7 @@ m = [
 
 
 
-WORKS:
+# WORKS:
 
 T = t / 44100.0,
 s = 3.0,
@@ -84,7 +85,7 @@ m = [
 ) / 3.0
 
 
-With DELAY:
+# With DELAY:
 
 T = t / 48000.0,
 s = 2.0,
