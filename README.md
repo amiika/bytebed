@@ -71,3 +71,4 @@ Sure, why not.
 * viznut: [For the very first bytebeats](https://countercomplex.blogspot.com/2011/10/algorithmic-symphonies-from-one-line-of.html)
 * SthephanShinkufag: [Bytebeat-composer](https://github.com/SthephanShinkufag/bytebeat-composer)
 * All the rest with examples from: https://dollchan.net/bytebeat/
+* tanakamasayuki: [EspHttpServer](https://github.com/tanakamasayuki/EspHttpServer)
