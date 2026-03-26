@@ -16,32 +16,48 @@
         }
         
         #container { 
-            width: 70%; height: 500px; background: #000; 
+            width: 95%;
+            max-width: 1000px;
+            height: 90vh; 
+            background: #000; 
             border: 1px solid #111; border-radius: 4px; 
             display: flex; flex-direction: column; 
             box-shadow: 0 0 20px rgba(0,0,0,0.8);
         }
         
         #header { 
-            display: flex; justify-content: space-between; align-items: center; 
-            padding: 15px; border-bottom: 1px solid #111; background: #050505; 
+            display: flex; 
+            flex-direction: column;
+            gap: 15px;
+            padding: 15px; 
+            border-bottom: 1px solid #111; 
+            background: #050505; 
         }
         
         .meta { 
             font-family: 'Bytesized', sans-serif; 
-            font-size: 32px; 
+            font-size: 28px; 
             font-weight: 700; 
             letter-spacing: 2px; 
             opacity: 0.9; 
             margin: 0; 
+            text-align: center;
             text-shadow: 0 0 10px rgba(0, 255, 0, 0.4);
         }
         
         .controls { 
             font-family: 'VT323', sans-serif; 
-            display: flex; gap: 8px; font-size: 18px; 
-            align-items: center; flex-wrap: wrap; justify-content: flex-end; 
+            display: flex; 
+            gap: 6px; 
+            font-size: 16px; 
+            align-items: center; 
+            overflow-x: auto; 
+            padding-bottom: 5px; 
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
         }
+        
+        .controls::-webkit-scrollbar { display: none; } 
         
         #viz-wrapper { 
             flex-grow: 1; position: relative; background: #000; overflow: hidden; cursor: crosshair; touch-action: none;
@@ -49,36 +65,44 @@
         
         canvas { width: 100%; height: 100%; display: block; }
         
-        #ui { padding: 15px; background: #050505; border-top: 1px solid #111; }
+        #ui { padding: 10px; background: #050505; border-top: 1px solid #111; }
         
         textarea { 
             width: 100%; background: transparent; color: #00ff00; border: none; 
-            font-family: 'VT323', sans-serif; font-size: 20px; outline: none; resize: none; 
-            max-height: 150px; 
+            font-family: 'VT323', sans-serif; font-size: 18px; outline: none; resize: none; 
+            height: 80px;
         }
 
         .btn { 
-            cursor: pointer; user-select: none; transition: all 0.15s ease; white-space: nowrap;
+            cursor: pointer; user-select: none; transition: all 0.1s ease; white-space: nowrap;
             color: #00ff00; border: 1px solid #004400; background: transparent; text-decoration: none;
             text-transform: uppercase; border-radius: 2px;
-            
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            height: 34px;
-            padding: 0 12px;
+            height: 38px;
+            padding: 0 10px;
             box-sizing: border-box;
+            flex-shrink: 0; 
         }
         
-        .btn:hover { background: rgba(0,255,0,0.05); border-color: #00ff00; box-shadow: 0 0 8px rgba(0,255,0,0.1); }
-        .btn.active { background: rgba(0,255,0,0.08); border-color: #00ff00; color: #00ff00; box-shadow: inset 0 0 4px rgba(0,255,0,0.1); }
+        .btn:active { background: rgba(0,255,0,0.2); transform: scale(0.96); }
+        .btn.active { background: rgba(0,255,0,0.08); border-color: #00ff00; }
         
         .btn-icon { 
-            width: 34px; 
-            padding: 0; 
-            font-family: Arial, sans-serif; 
-            font-size: 16px; 
-            font-weight: bold; 
+            width: 38px; 
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            font-size: 18px; 
+        }
+
+        /* Desktop Adjustments */
+        @media (min-width: 768px) {
+            #container { width: 80%; height: 600px; }
+            #header { flex-direction: row; justify-content: space-between; }
+            .meta { text-align: left; }
+            .controls { overflow-x: visible; }
+            textarea { height: 120px; }
         }
     </style>
 </head>
@@ -87,16 +111,16 @@
         <div id="header">
             <div class="meta" id="status">BYTEBED</div>
             <div class="controls">
-                <span id="play-btn" class="btn btn-icon" onclick="togglePlay(event)" title="Play/Pause">▶</span>
-                <span id="stop-btn" class="btn btn-icon" onclick="resetT(event)" title="Stop & Reset">▢</span>
+                <span id="play-btn" class="btn btn-icon" onclick="togglePlay(event)">▶&#xFE0E;</span>
+                <span id="stop-btn" class="btn btn-icon" onclick="resetT(event)">▢&#xFE0E;</span>
                 <span id="rate-btn" class="btn" onclick="cycleRate(event)">8000HZ</span>
                 <span id="format-btn" class="btn active" onclick="toggleFormat(event)">BYTEBEAT</span>
-                <span class="btn btn-icon" onclick="zoomIn(event)" title="Zoom In">＋</span>
+                <span class="btn btn-icon" onclick="zoomIn(event)">＋&#xFE0E;</span>
                 <span id="vis-btn" class="btn" onclick="toggleVis(event)">WAVEFORM</span>
-                <span class="btn btn-icon" onclick="zoomOut(event)" title="Zoom Out">－</span>
+                <span class="btn btn-icon" onclick="zoomOut(event)">－&#xFE0E;</span>
                 <span id="mode-btn" class="btn active" onclick="toggleMode(event)">INFIX</span>
                 <span id="btn-auto" class="btn active" onclick="toggleAuto(event)">AUTO</span>
-                <span id="share-btn" class="btn btn-icon" onclick="shareCode(event)" title="Share Link">↗</span>
+                <span id="share-btn" class="btn btn-icon" onclick="shareCode(event)">↗&#xFE0E;</span>
             </div>
         </div>
 
