@@ -61,6 +61,26 @@
             grid-template-columns: 1fr 1fr;
             gap: 24px;
             margin: 24px 0;
+            position: relative;
+        }
+        .switcher {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            color: #58a6ff;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-weight: bold;
+            font-size: 20px;
+            box-shadow: 0 0 0 6px #0d1117;
         }
         .box {
             border: 1px solid #30363d;
@@ -146,6 +166,9 @@
             .dual {
                 grid-template-columns: 1fr;
             }
+            .switcher {
+                transform: translate(-50%, -50%) rotate(90deg);
+            }
             .nav {
                 position: relative;
                 top: 0;
@@ -175,6 +198,7 @@
             <code>a = 3, b = 6; t >> a | t >> b</code>
             <code>f(n){ n * t }; t * f(t)</code>
         </div>
+        <div class="switcher">&#8660;</div>
         <div class="box">
             <strong>POSTFIX (Stack-based)</strong>
             <code>t t 8 >> t 11 >> | *</code>
@@ -214,6 +238,6 @@
     <h3>Dont have cardputer?</h3>
     <p>If you are eager to try, you can also run the compiler & virtual machine <a href="pages/player.html">in the browser.</a></p>
 
-    <footer>BYTEBED</footer>
+    <footer>BYTEBED - 2026</footer>
 </body>
 </html>
