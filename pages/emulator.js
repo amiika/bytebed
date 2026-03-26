@@ -26,6 +26,29 @@ function mod(a, b) {
     return ((a % b) + b) % b;
 }
 
+function base64UrlEncode(str) {
+    const utf8Bytes = new TextEncoder().encode(str);
+    let binaryStr = "";
+    for (let i = 0; i < utf8Bytes.length; i++) {
+        binaryStr += String.fromCharCode(utf8Bytes[i]);
+    }
+    const base64 = btoa(binaryStr);
+    return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function base64UrlDecode(base64Url) {
+    let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    while (base64.length % 4) {
+        base64 += '=';
+    }
+    const binaryStr = atob(base64);
+    const utf8Bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+        utf8Bytes[i] = binaryStr.charCodeAt(i);
+    }
+    return new TextDecoder().decode(utf8Bytes);
+}
+
 class Scope {
     constructor() {
         this.analyser = [null, null];
@@ -396,36 +419,62 @@ function autoExpand() {
     formulaInput.style.height = formulaInput.scrollHeight + 'px';
 }
 
-function checkURLParams() {
-    const urlParams = new URLSearchParams(window.location.search);
-    const code = urlParams.get('code');
-    const mode = urlParams.get('m');
-    if (code) {
-        try {
-            let base64 = decodeURIComponent(code).replace(/-/g, '+').replace(/_/g, '/');
-            while (base64.length % 4) base64 += '=';
-            const decoded = decodeURIComponent(atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-            formulaInput.value = decoded;
-            is_rpn = (mode === 'r');
-            modeBtn.innerText = is_rpn ? "RPN" : "INFIX";
-            autoExpand();
-            return true;
-        } catch(e) { console.error("URL Restore Failed", e); }
-    }
-    return false;
-}
-
 function shareCode(e) {
     if(e) e.stopPropagation();
-    const utf8Bytes = encodeURIComponent(formulaInput.value).replace(/%([0-9A-F]{2})/g, (m, p1) => String.fromCharCode('0x' + p1));
-    const safeBase64 = btoa(utf8Bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+    const safeBase64 = base64UrlEncode(formulaInput.value);
     const mode = is_rpn ? 'r' : 'i';
-    const url = `${window.location.origin}${window.location.pathname}?m=${mode}&code=${encodeURIComponent(safeBase64)}`;
+    const fmt = isFloatbeat ? 'f' : 'b';
+    const url = `${window.location.origin}${window.location.pathname}?m=${mode}&fmt=${fmt}&sr=${targetSampleRate}&code=${safeBase64}`;
+    
     navigator.clipboard.writeText(url).then(() => {
         const oldText = shareBtn.innerText;
         shareBtn.innerText = "✓";
         setTimeout(() => { shareBtn.innerText = oldText; }, 1500);
     });
+}
+
+function checkURLParams() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const code = urlParams.get('code');
+    const mode = urlParams.get('m');
+    const fmt = urlParams.get('fmt');
+    const sr = urlParams.get('sr');
+    
+    if (code) {
+        try {
+            const decoded = base64UrlDecode(code);
+            formulaInput.value = decoded;
+            
+            is_rpn = (mode === 'r');
+            modeBtn.innerText = is_rpn ? "RPN" : "INFIX";
+            
+            if (fmt === 'f') {
+                isFloatbeat = true;
+                document.getElementById('format-btn').innerText = "FLOATBEAT";
+                document.getElementById('format-btn').classList.remove('active');
+            } else if (fmt === 'b') {
+                isFloatbeat = false;
+                document.getElementById('format-btn').innerText = "BYTEBEAT";
+                document.getElementById('format-btn').classList.add('active');
+            }
+            
+            if (sr) {
+                const parsedRate = parseInt(sr, 10);
+                if (!isNaN(parsedRate)) {
+                    targetSampleRate = parsedRate;
+                    const foundIdx = rates.indexOf(targetSampleRate);
+                    if (foundIdx !== -1) currentRateIdx = foundIdx;
+                    document.getElementById('rate-btn').innerText = targetSampleRate + "HZ";
+                }
+            }
+            
+            autoExpand();
+            return true;
+        } catch(e) { 
+            console.error("URL Restore Failed", e); 
+        }
+    }
+    return false;
 }
 
 function getDecompiledText(toRPN) {
@@ -586,7 +635,7 @@ async function togglePlay(e) {
     if (audioCtx && audioCtx.state === 'suspended') await audioCtx.resume();
     
     is_playing = !is_playing;
-    playBtn.innerText = is_playing ? "⏸" : "▶";
+    playBtn.innerText = is_playing ? "⏸" : "▶\xFE0E";
     if (is_playing) playBtn.classList.add('active'); else playBtn.classList.remove('active');
     
     if (workletNode) {
@@ -599,7 +648,7 @@ function resetT(e) {
     
     is_playing = false;
     if (playBtn) {
-        playBtn.innerText = "▶";
+        playBtn.innerText = "▶\xFE0E";
         playBtn.classList.remove('active');
     }
     
