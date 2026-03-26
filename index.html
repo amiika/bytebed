@@ -196,14 +196,14 @@
             <strong>INFIX (C-style)</strong>
             <code>t * (t >> 8 | t >> 11)</code>
             <code>a = 3, b = 6; t >> a | t >> b</code>
-            <code>f(n){ n * t }; t * f(t)</code>
+            <code>f = (n) => {n*t}; f(1)</code>
         </div>
         <div class="switcher">&#8660;</div>
         <div class="box">
             <strong>POSTFIX (Stack-based)</strong>
             <code>t t 8 >> t 11 >> | *</code>
             <code>3 a = 6 b = t a >> t b >> |</code>
-            <code>(n){ n t * } f = t t f *</code>
+            <code>(n) { n t * } f = 1 f</code>
         </div>
     </div>
 
