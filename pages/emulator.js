@@ -405,7 +405,7 @@ function checkURLParams() {
             let base64 = decodeURIComponent(code).replace(/-/g, '+').replace(/_/g, '/');
             while (base64.length % 4) base64 += '=';
             const decoded = decodeURIComponent(atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join(''));
-            formulaInput.value = decodeURIComponent(decoded);
+            formulaInput.value = decoded;
             is_rpn = (mode === 'r');
             modeBtn.innerText = is_rpn ? "RPN" : "INFIX";
             autoExpand();
