@@ -468,6 +468,12 @@ function checkURLParams() {
                 }
             }
             
+            if (wasm) {
+                if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+                if (wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(targetSampleRate);
+                if (wasm.wasm_reset_vm) wasm.wasm_reset_vm();
+            }
+            
             autoExpand();
             return true;
         } catch(e) { 
@@ -635,7 +641,7 @@ async function togglePlay(e) {
     if (audioCtx && audioCtx.state === 'suspended') await audioCtx.resume();
     
     is_playing = !is_playing;
-    playBtn.innerText = is_playing ? "⏸" : "▶\xFE0E";
+    playBtn.innerText = is_playing ? "⏸\uFE0E" : "▶\uFE0E";
     if (is_playing) playBtn.classList.add('active'); else playBtn.classList.remove('active');
     
     if (workletNode) {
@@ -648,7 +654,7 @@ function resetT(e) {
     
     is_playing = false;
     if (playBtn) {
-        playBtn.innerText = "▶\xFE0E";
+        playBtn.innerText = "▶\uFE0E";
         playBtn.classList.remove('active');
     }
     
