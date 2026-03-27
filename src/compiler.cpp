@@ -1,5 +1,4 @@
 #include "compiler.h"
-
 /**
  * Compiles an infix formula into VM bytecode.
  * @param input The infix expression to compile
@@ -18,6 +17,12 @@ bool compileInfix(String input, bool reset_t) {
     int bracket_types[128]; int bt_ptr = -1;
     int array_counts[128]; int ac_ptr = -1;
     bool expect_op = false; 
+
+    String wordBuffer;
+
+    #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
+        wordBuffer.reserve(16); // Cardputer optimization
+    #endif
 
     while (*p) {
         if (len >= 512 || ot >= 255) return false; 
@@ -50,26 +55,27 @@ bool compileInfix(String input, bool reset_t) {
             program_bank[target][len++] = {OP_VAL, setF(strtof(p, (char**)&p))}; 
         }
         else if (isalpha(*p)) { 
-            String word = ""; while (isalpha(*p) || isdigit(*p) || *p == '_') word += *p++; 
-            if (word == "return") { expect_op = false; continue; } 
+            wordBuffer = ""; 
+            while (isalpha(*p) || isdigit(*p) || *p == '_') wordBuffer += *p++; 
+            if (wordBuffer == "return") { expect_op = false; continue; } 
             
             bool is_math = false;
             for (int _m = 0; _m < mathLibrarySize; _m++) { 
-                if (word == mathLibrary[_m].name) { if (expect_op) return false; expect_op = false; os[++ot] = mathLibrary[_m].code; os_id[ot] = 0; is_math = true; break; } 
+                if (wordBuffer == mathLibrary[_m].name) { if (expect_op) return false; expect_op = false; os[++ot] = mathLibrary[_m].code; os_id[ot] = 0; is_math = true; break; } 
             }
-            if (!is_math && (word == "sum" || word == "gen" || word == "map" || word == "reduce" || word == "filter")) {
+            if (!is_math && (wordBuffer == "sum" || wordBuffer == "gen" || wordBuffer == "map" || wordBuffer == "reduce" || wordBuffer == "filter")) {
                 if (expect_op) return false; expect_op = false; 
                 os[++ot] = OP_LOOP_PREP; 
-                int ltype = 0; if (word == "gen") ltype = 1; else if (word == "map") ltype = 2; else if (word == "reduce") ltype = 3; else if (word == "filter") ltype = 4;
+                int ltype = 0; if (wordBuffer == "gen") ltype = 1; else if (wordBuffer == "map") ltype = 2; else if (wordBuffer == "reduce") ltype = 3; else if (wordBuffer == "filter") ltype = 4;
                 os_id[ot] = ltype; 
                 is_math = true; 
             }
-            if (!is_math && !isVarDefined(word)) {
+            if (!is_math && !isVarDefined(wordBuffer)) {
                 const char* temp2 = p;
                 while (isspace(*temp2)) temp2++;
                 if (*temp2 == '(') {
                     for (int _s = 0; _s < shorthandsSize; _s++) {
-                        if (word == shorthands[_s].name) {
+                        if (wordBuffer == shorthands[_s].name) {
                             if (expect_op) return false; expect_op = false; os[++ot] = shorthands[_s].code; os_id[ot] = 0; is_math = true; break;
                         }
                     }
@@ -80,7 +86,7 @@ bool compileInfix(String input, bool reset_t) {
             const char* temp = p; while (isspace(*temp)) temp++;
             if (*temp == '=' && *(temp+1) == '>') {
                 if (expect_op) return false;
-                int pid = getVarId(word); int start_pc = len;
+                int pid = getVarId(wordBuffer); int start_pc = len;
                 program_bank[target][len++] = {OP_PUSH_FUNC, 0}; program_bank[target][len++] = {OP_BIND, (int32_t)pid};
                 
                 temp += 2; while (isspace(*temp)) temp++;
@@ -93,7 +99,7 @@ bool compileInfix(String input, bool reset_t) {
                 os[++ot] = OP_NONE; p = temp; expect_op = false; continue;
             }
 
-            int id = getVarId(word); while (isspace(*p)) p++;
+            int id = getVarId(wordBuffer); while (isspace(*p)) p++;
             if (expect_op) return false; 
 
             if (*p == '(') { os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; } 
@@ -226,15 +232,15 @@ bool compileInfix(String input, bool reset_t) {
         else if (*p == '.') {
             if (!expect_op) return false; 
             p++;
-            String method = "";
-            while (isalpha(*p) || isdigit(*p) || *p == '_') method += *p++;
-            if (method == "sum" || method == "gen" || method == "map" || method == "reduce" || method == "filter") {
+            wordBuffer = "";
+            while (isalpha(*p) || isdigit(*p) || *p == '_') wordBuffer += *p++;
+            if (wordBuffer == "sum" || wordBuffer == "gen" || wordBuffer == "map" || wordBuffer == "reduce" || wordBuffer == "filter") {
                 os[++ot] = OP_LOOP_PREP;
                 int ltype = 0;
-                if (method == "gen") ltype = 1;
-                else if (method == "map") ltype = 2;
-                else if (method == "reduce") ltype = 3;
-                else if (method == "filter") ltype = 4;
+                if (wordBuffer == "gen") ltype = 1;
+                else if (wordBuffer == "map") ltype = 2;
+                else if (wordBuffer == "reduce") ltype = 3;
+                else if (wordBuffer == "filter") ltype = 4;
                 os_id[ot] = ltype;
                 expect_op = false; 
             } else {
@@ -573,10 +579,20 @@ void initCompilerState() {
 static bool isLambdaDef(const char* p, String* params, int& param_cnt, int& consume_len) {
     if (*p != '(') return false;
     const char* q = p + 1;
-    String curr = "";
+    
+    String curr;
+
+    #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
+        curr.reserve(16); // Cardputer optimization
+    #endif
+
     while (*q && *q != ')') {
         if (*q == '(') return false; 
-        if (*q == ',') { curr.trim(); if(curr.length()>0 && param_cnt < 8) params[param_cnt++] = curr; curr = ""; }
+        if (*q == ',') { 
+            curr.trim(); 
+            if(curr.length()>0 && param_cnt < 8) params[param_cnt++] = curr; 
+            curr = "";
+        }
         else curr += *q;
         q++;
     }
