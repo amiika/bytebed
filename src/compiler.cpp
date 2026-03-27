@@ -1,4 +1,6 @@
 #include "compiler.h"
+#include <memory>
+
 /**
  * Compiles an infix formula into VM bytecode.
  * @param input The infix expression to compile
@@ -9,13 +11,19 @@ bool compileInfix(String input, bool reset_t) {
     initCompilerState();
     
     uint8_t target = 1 - active_bank; memset(program_bank[target], 0, sizeof(Instruction) * 512);
-    OpCode os[256]; int os_id[256]; int ot = -1; int len = 0; const char* p = input.c_str();
+    
+    std::unique_ptr<OpCode[]> os(new OpCode[256]);
+    std::unique_ptr<int[]> os_id(new int[256]);
+    std::unique_ptr<int[]> call_arg_counts(new int[128]);
+    std::unique_ptr<int[]> cond_starts(new int[128]);
+    std::unique_ptr<LambdaCtx[]> open_lambdas(new LambdaCtx[64]);
+    std::unique_ptr<int[]> bracket_types(new int[128]);
+    std::unique_ptr<int[]> array_counts(new int[128]);
+    
+    int ot = -1; int len = 0; const char* p = input.c_str();
     int paren_depth = 0; int cond_depth = 0;
-    int call_arg_counts[128]; int cac_ptr = -1;
-    int cond_starts[128]; int cs_ptr = -1;
-    LambdaCtx open_lambdas[64]; int ol_ptr = -1;
-    int bracket_types[128]; int bt_ptr = -1;
-    int array_counts[128]; int ac_ptr = -1;
+    int cac_ptr = -1; int cs_ptr = -1; int ol_ptr = -1;
+    int bt_ptr = -1; int ac_ptr = -1;
     bool expect_op = false; 
 
     String wordBuffer;
@@ -31,7 +39,7 @@ bool compileInfix(String input, bool reset_t) {
             while (ol_ptr >= 0) {
                 auto& lam = open_lambdas[ol_ptr];
                 if (!lam.uses_braces && paren_depth <= lam.depth) {
-                    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+                    flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true);
                     if (ot >= 0 && os[ot] == OP_NONE) ot--; 
                     
                     int assigns_to_keep[64]; int atk_cnt = 0;
@@ -149,7 +157,7 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == ')') { 
             if (paren_depth <= 0 || (bt_ptr >= 0 && bracket_types[bt_ptr] != 0)) return false; 
-            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
+            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); 
             int args = 0; if (cac_ptr >= 0) args = call_arg_counts[cac_ptr--]; 
             if (bt_ptr >= 0) bt_ptr--;
             if (ot >= 0) { 
@@ -170,13 +178,12 @@ bool compileInfix(String input, bool reset_t) {
                                 int expr_len = args_start - expr_start;
                                 int args_len = len - args_start;
                                 
-                                Instruction* temp = new Instruction[512];
-                                memcpy(temp, &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
+                                std::unique_ptr<Instruction[]> temp(new Instruction[512]);
+                                memcpy(temp.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
                                 
                                 int ptr = expr_start;
                                 memcpy(&program_bank[target][ptr], &temp[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
                                 memcpy(&program_bank[target][ptr], &temp[0], expr_len * sizeof(Instruction));
-                                delete[] temp;
                             }
                             program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
                         }
@@ -213,7 +220,7 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == ']') {
             if (paren_depth <= 0 || bt_ptr < 0) return false;
-            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true);
             if (ot >= 0) ot--; 
             int btype = bracket_types[bt_ptr--];
             
@@ -251,7 +258,7 @@ bool compileInfix(String input, bool reset_t) {
         else if (*p == '}') {
             if (ol_ptr >= 0 && open_lambdas[ol_ptr].uses_braces) {
                 auto& lam = open_lambdas[ol_ptr];
-                flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+                flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true);
                 if (ot >= 0 && os[ot] == OP_NONE) ot--; 
                 int assigns_to_keep[64]; int atk_cnt = 0;
                 while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
@@ -266,14 +273,14 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == '?') { 
             if (!expect_op) return false; expect_op = false;
-            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, getPrecedence(OP_COND) + 1, true); 
+            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, getPrecedence(OP_COND) + 1, true); 
             os[++ot] = OP_COND; cond_depth++; p++; program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
             if (cs_ptr < 127) cond_starts[++cs_ptr] = len - 1;
         }
         else if (*p == ':') { 
             if (!expect_op) return false; expect_op = false; if (cond_depth <= 0) return false; 
             
-            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_COND, -1, true); 
+            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_COND, -1, true); 
             
             if (ot < 0 || os[ot] != OP_COND) return false;
             os[ot] = OP_COLON;
@@ -288,10 +295,10 @@ bool compileInfix(String input, bool reset_t) {
             
             cond_depth--; p++; 
         }
-        else if (*p == ';') { expect_op = false; flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); program_bank[target][len++] = {OP_POP, 0}; p++; }
+        else if (*p == ';') { expect_op = false; flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); program_bank[target][len++] = {OP_POP, 0}; p++; }
         else if (*p == ',') { 
             if (!expect_op) return false; expect_op = false; 
-            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); 
+            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); 
             
             bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_LOOP_PREP));
             bool is_array = (bt_ptr >= 0 && bracket_types[bt_ptr] == 1);
@@ -305,7 +312,7 @@ bool compileInfix(String input, bool reset_t) {
             if (len > 0 && program_bank[target][len - 1].op == OP_AT) {
                 len--; os[++ot] = OP_STORE_AT; os_id[ot] = 0; p++; expect_op = false;
             } else {
-                if (!applyCompoundAssign(target, len, os, os_id, ot, OP_ASSIGN_VAR)) return false;
+                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, OP_ASSIGN_VAR)) return false;
                 p++; expect_op = false;
             }
         }
@@ -313,7 +320,7 @@ bool compileInfix(String input, bool reset_t) {
             OpCode compOp;
             int adv = 0;
             if (parseCompoundOperator(p, compOp, adv)) {
-                if (!applyCompoundAssign(target, len, os, os_id, ot, compOp)) return false;
+                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, compOp)) return false;
                 p += adv; 
                 expect_op = false;
             } else {
@@ -325,7 +332,7 @@ bool compileInfix(String input, bool reset_t) {
                     bool is_unary = (cur == OP_NOT || cur == OP_NEG || cur == OP_BNOT);
                     if (!expect_op && !is_unary) return false; expect_op = false;
                     int prec = getPrecedence(cur); if (cur == OP_POW) prec++; 
-                    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, prec, true); 
+                    flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, prec, true); 
                     if (cur == OP_SC_AND || cur == OP_SC_OR) { program_bank[target][len++] = {cur, 0}; os[++ot] = cur; os_id[ot] = len - 1; } 
                     else { os[++ot] = cur; os_id[ot] = 0; }
                     p += opStr.length(); 
@@ -337,7 +344,7 @@ bool compileInfix(String input, bool reset_t) {
     while (ol_ptr >= 0) {
         auto& lam = open_lambdas[ol_ptr];
         if (!lam.uses_braces) {
-            flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true); if (ot >= 0 && os[ot] == OP_NONE) ot--; 
+            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); if (ot >= 0 && os[ot] == OP_NONE) ot--; 
             int assigns_to_keep[64]; int atk_cnt = 0;
             while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
                 if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
@@ -351,7 +358,7 @@ bool compileInfix(String input, bool reset_t) {
     }
 
     if (paren_depth != 0 || cond_depth != 0) return false; 
-    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr);
+    flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr);
     if (!validateProgram(target, len)) return false;
     if (reset_t) t_raw = 0; prog_len_bank[target] = len; active_bank = target; 
     return true;
@@ -371,8 +378,8 @@ bool compileRPN(String input) {
     int rpn_func_arity[64]; for (int i = 0; i < 64; i++) rpn_func_arity[i] = -1;
     int block_arity_stack[32]; int bas_ptr = -1; int last_completed_arity = 0;
     
-    std::vector<String> tokens(512); 
-    int tok_cnt = tokenize(input, tokens.data(), 512);
+    std::unique_ptr<String[]> tokens(new String[512]); 
+    int tok_cnt = tokenize(input, tokens.get(), 512);
     
     int block_starts[32]; int bs_ptr = -1;
     int block_params[32][8]; int bp_counts[32]; int bp_ptr = -1;

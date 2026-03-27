@@ -1,18 +1,27 @@
 #include "vm.h"
 #include <string.h>
-#include <vector>
+#include <memory>
 
+/**
+ * Decompiles the current program bank into an RPN formula string.
+ * @return The decompiled RPN string
+ */
 String decompileRPN() {
     String out = "";
+
+    #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
+        out.reserve(256);
+    #endif
+
     int len = prog_len_bank[active_bank];
     if (len == 0) return "";
     Instruction* prog = program_bank[active_bank];
     
-    int func_ends[256];
+    std::unique_ptr<int[]> func_ends(new int[256]);
     int fe_ptr = -1;
 
-    int sc_targets[256];
-    OpCode sc_ops[256];
+    std::unique_ptr<int[]> sc_targets(new int[256]);
+    std::unique_ptr<OpCode[]> sc_ops(new OpCode[256]);
     int sc_ptr = -1;
     
     for (int pc = 0; pc < len; pc++) {
@@ -189,11 +198,21 @@ String decompileRPN() {
     return out;
 }
 
+/**
+ * Decompiles a specific range of instructions into an infix formula string.
+ * @param prog Pointer to the instruction array
+ * @param start_pc The starting program counter index
+ * @param end_pc The ending program counter index
+ * @return The decompiled infix string
+ */
 String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     String out = "";
+#if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
+    out.reserve(256);
+#endif
     
-    std::vector<String> stack(256);
-    int prec_stack[256];
+    std::unique_ptr<String[]> stack(new String[256]);
+    std::unique_ptr<int[]> prec_stack(new int[256]);
     int sp = -1;
     
     for (int pc = start_pc; pc < end_pc; pc++) {
@@ -423,7 +442,8 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     }
     
     String assignments = "";
-    String orphaned_args[64]; int oa_cnt = 0;
+    std::unique_ptr<String[]> orphaned_args(new String[64]); 
+    int oa_cnt = 0;
     
     for (int i = 0; i <= sp; i++) {
         if (prec_stack[i] == -1) {
@@ -457,10 +477,19 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     return final_out;
 }
 
+/**
+ * Decompiles the current program bank into an infix formula string.
+ * @return The decompiled infix string
+ */
 String decompileInfix() {
     return decompileInfixRange(program_bank[active_bank], 0, prog_len_bank[active_bank]);
 }
 
+/**
+ * Decompiles the current program bank into either RPN or infix syntax.
+ * @param to_rpn If true, decompiles to RPN; otherwise, to infix
+ * @return The decompiled formula string
+ */
 String decompile(bool to_rpn) {
     if (prog_len_bank[active_bank] == 0) return "";
     return to_rpn ? decompileRPN() : decompileInfix();

@@ -1,7 +1,14 @@
 #include "vm.h"
 #include <math.h>
 #include <algorithm>
+#include <memory>
 
+/**
+ * Validates a compiled virtual machine program to ensure memory and stack safety.
+ * @param bank The program bank index to validate
+ * @param len The length of the compiled program
+ * @return true if the program is valid and safe to execute, false otherwise
+ */
 bool validateProgram(uint8_t bank, int len) {
     if (len == 0 || len > 512) return false;
     
@@ -14,16 +21,17 @@ bool validateProgram(uint8_t bank, int len) {
         }
     }
 
-    static Val v_stack[512]; int sp = -1;
-    static int32_t c_stack[512]; int csp = -1;
-    static Val l_vars[64];
-    static Val l_shadow_val[512]; int l_ssp = -1;
+    // Safely allocate tracking arrays on the heap to protect the FreeRTOS task stack
+    std::unique_ptr<Val[]> v_stack(new Val[512]); int sp = -1;
+    std::unique_ptr<int32_t[]> c_stack(new int32_t[512]); int csp = -1;
+    std::unique_ptr<Val[]> l_vars(new Val[64]);
+    std::unique_ptr<Val[]> l_shadow_val(new Val[512]); int l_ssp = -1;
     
     int v_loop_pcs[16];
     int v_loop_types[16];
     int v_loop_ptr = -1;
 
-    memset(l_vars, 0, sizeof(l_vars));
+    memset(l_vars.get(), 0, 64 * sizeof(Val));
 
     int steps = 0;
     for (int pc = 0; pc < len && pc >= 0; pc++) {
@@ -37,14 +45,21 @@ bool validateProgram(uint8_t bank, int len) {
                 break;
             
             case OP_LOAD: 
+                if (inst.val < 0 || inst.val >= 64) return false;
                 if (sp >= 511) return false;
                 v_stack[++sp] = l_vars[inst.val]; break;
             
             case OP_STORE: 
+                if (inst.val < 0 || inst.val >= 64) return false;
                 if (sp < 0) return false; 
                 l_vars[inst.val] = v_stack[sp--]; break;
             
             case OP_STORE_KEEP: case OP_ASSIGN_VAR:
+            case OP_ADD_ASSIGN: case OP_SUB_ASSIGN: case OP_MUL_ASSIGN: 
+            case OP_DIV_ASSIGN: case OP_MOD_ASSIGN: case OP_AND_ASSIGN: 
+            case OP_OR_ASSIGN:  case OP_XOR_ASSIGN: case OP_SHL_ASSIGN: 
+            case OP_SHR_ASSIGN: case OP_POW_ASSIGN:
+                if (inst.val < 0 || inst.val >= 64) return false;
                 if (sp < 0) return false; 
                 l_vars[inst.val] = v_stack[sp]; break;
                 
@@ -61,7 +76,8 @@ bool validateProgram(uint8_t bank, int len) {
                 if (v_stack[sp].type == 1 && csp < 5) { 
                     if (csp < 511) { 
                         c_stack[++csp] = pc; 
-                        pc = v_stack[sp--].v - 1; 
+                        pc = v_stack[sp].v - 1; 
+                        sp--;
                     } else return false;
                 } else {
                     int args = inst.val;
@@ -73,7 +89,8 @@ bool validateProgram(uint8_t bank, int len) {
             case OP_DYN_CALL_IF_FUNC:
                 if (sp >= 0 && v_stack[sp].type == 1 && csp < 5) { 
                     c_stack[++csp] = pc; 
-                    pc = v_stack[sp--].v - 1; 
+                    pc = v_stack[sp].v - 1; 
+                    sp--;
                 }
                 break;
 
@@ -82,11 +99,13 @@ bool validateProgram(uint8_t bank, int len) {
                 else pc = len; break;
                 
             case OP_BIND:
+                if (inst.val < 0 || inst.val >= 64) return false;
                 if (sp < 0) return false;
                 if (l_ssp < 511) l_shadow_val[++l_ssp] = l_vars[inst.val];
                 l_vars[inst.val] = v_stack[sp--]; break;
 
             case OP_UNBIND:
+                if (inst.val < 0 || inst.val >= 64) return false;
                 if (l_ssp >= 0) l_vars[inst.val] = l_shadow_val[l_ssp--]; break;
             
             case OP_VEC: 

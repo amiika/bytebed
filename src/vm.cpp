@@ -2,82 +2,6 @@
 #include "fast_math.h"
 #include <algorithm>
 
-Instruction program_bank[2][512];
-int prog_len_bank[2] = {0, 0};
-volatile uint8_t active_bank = 0;
-
-Val vars[64];
-String symNames[64];
-int var_count = 0;
-
-float* global_array_mem = nullptr;
-int32_t global_array_capacity = 0;
-
-float local_array_mem[1024];
-int local_array_ptr = 0;
-
-struct LoopState { 
-    int type;       // 0=SUM, 1=GEN, 2=MAP, 3=REDUCE, 4=FILTER
-    float acc;      
-    float limit;    
-    int f_pc;       
-    float i;        
-    int saved_sp;   
-    Val iterable;   
-    float current_val; // Retained for filter repackaging
-};
-static LoopState loop_stack[32];
-int loop_sp = -1;
-
-void ensure_global_array(int32_t req_size) {
-    if (req_size <= 0 || req_size > 65536) return; 
-    if (req_size > global_array_capacity) {
-        if (global_array_mem) free(global_array_mem);
-        #if defined(ESP32)
-        global_array_mem = (float*)heap_caps_malloc(req_size * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-        #else
-        global_array_mem = (float*)malloc(req_size * sizeof(float));
-        #endif
-        if (global_array_mem) {
-            memset(global_array_mem, 0, req_size * sizeof(float));
-            global_array_capacity = req_size;
-        } else {
-            global_array_capacity = 0;
-        }
-    }
-}
-
-void clear_global_array() {
-    if (global_array_mem && global_array_capacity > 0) {
-        memset(global_array_mem, 0, global_array_capacity * sizeof(float));
-    }
-}
-
-inline float encode_vec(int32_t v) { 
-    union { float f; uint32_t i; } u;
-    u.i = 0x78000000 | (v & 0x07FFFFFF); 
-    return u.f; 
-}
-
-inline bool is_vec_tag(float f) { 
-    union { float f; uint32_t i; } u;
-    u.f = f;
-    return (u.i & 0xF8000000) == 0x78000000; 
-}
-
-inline int32_t decode_vec(float f) { 
-    union { float f; uint32_t i; } u;
-    u.f = f;
-    return (int32_t)(u.i & 0x07FFFFFF); 
-}
-
-inline float sanitize(float f) {
-    union { float f; uint32_t i; } u;
-    u.f = f;
-    if ((u.i & 0x7F800000) == 0x7F800000) return 0.0f;
-    return f;
-}
-
 const MathFunc mathLibrary[] = {
     {"sin",   OP_SIN,   true},  {"cos",   OP_COS,   true},  {"tan",   OP_TAN,   true},
     {"sqrt",  OP_SQRT,  true},  {"log",   OP_LOG,   true},  {"exp",   OP_EXP,   true},
@@ -113,23 +37,95 @@ const OpInfo opList[] = {
 };
 const int opListSize = 37;
 
-int getVarId(String name) {
+Instruction program_bank[2][512];
+int prog_len_bank[2] = {0, 0};
+volatile uint8_t active_bank = 0;
+
+Val vars[64];
+String symNames[64];
+int var_count = 0;
+
+float* global_array_mem = nullptr;
+int32_t global_array_capacity = 0;
+
+float local_array_mem[1024];
+int local_array_ptr = 0;
+
+struct LoopState { 
+    int type;       
+    float acc;      
+    float limit;    
+    int f_pc;       
+    float i;        
+    int saved_sp;   
+    Val iterable;   
+    float current_val; 
+};
+static LoopState loop_stack[32];
+int loop_sp = -1;
+
+inline float encode_vec(int32_t v) { 
+    union { float f; uint32_t i; } u;
+    u.i = 0x78000000 | (v & 0x07FFFFFF); 
+    return u.f; 
+}
+
+inline bool is_vec_tag(float f) { 
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    return (u.i & 0xF8000000) == 0x78000000; 
+}
+
+inline int32_t decode_vec(float f) { 
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    return (int32_t)(u.i & 0x07FFFFFF); 
+}
+
+inline float sanitize(float f) {
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    if ((u.i & 0x7F800000) == 0x7F800000) return 0.0f;
+    return f;
+}
+
+/**
+ * Gets or creates an ID for a variable name.
+ * @param name The name of the variable
+ * @return The ID of the variable
+ */
+int getVarId(const String& name) {
     for (int i = 0; i < var_count; i++) if (symNames[i] == name) return i;
     if (var_count >= 63) return 63; 
     symNames[var_count] = name;
     return var_count++;
 }
 
+/**
+ * Gets the name of a variable by its ID.
+ * @param id The ID of the variable
+ * @return The name of the variable
+ */
 String getVarName(int id) {
     if (id >= 0 && id < var_count) return symNames[id];
     return "v" + String(id);
 }
 
+/**
+ * Checks if a variable is defined.
+ * @param name The name to check
+ * @return true if defined, false otherwise
+ */
 bool isVarDefined(const String& name) {
     for (int i = 0; i < var_count; i++) if (symNames[i] == name) return true;
     return false;
 }
 
+/**
+ * Gets the precedence of a given OpCode.
+ * @param op The OpCode
+ * @return The precedence level
+ */
 int getPrecedence(OpCode op) {
     for (int i = 0; i < opListSize; i++) if (opList[i].code == op) return opList[i].precedence;
     if (op == OP_COND || op == OP_COLON) return 0;
@@ -139,6 +135,11 @@ int getPrecedence(OpCode op) {
     return 10; 
 }
 
+/**
+ * Gets the symbol string for a given OpCode.
+ * @param op The OpCode
+ * @return The symbol string
+ */
 String getOpSym(OpCode op) {
     if (op == OP_COND) return "?"; 
     if (op == OP_BNOT) return "~";
@@ -148,11 +149,23 @@ String getOpSym(OpCode op) {
     return "";
 }
 
+/**
+ * Gets the OpCode for a given symbol.
+ * @param sym The symbol string
+ * @param outCode Reference to store the OpCode
+ * @return true if found, false otherwise
+ */
 bool getOpCode(const String& sym, OpCode& outCode) {
     for (int i = 0; i < opListSize; i++) if (sym == opList[i].sym) { outCode = opList[i].code; return true; }
     return false;
 }
 
+/**
+ * Executes a block of bytecode for audio generation.
+ * @param start_t The starting time step
+ * @param length The number of samples to generate
+ * @param out_buf The output buffer to write to
+ */
 void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     uint8_t bank = active_bank; 
     int len = prog_len_bank[bank];
@@ -193,14 +206,14 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         int pc = 0; Instruction inst = prog[pc]; goto *dispatch_table[inst.op];
         #define BOING() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[inst.op]; } while(0)
 
-        L_OP_VAL: stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BOING();
-        L_OP_T:   stack[++sp] = tos; tos.type = 0; tos.f = (float)t; BOING();
-        L_OP_LOAD: stack[++sp] = tos; tos = vars[inst.val]; BOING();
+        L_OP_VAL: if (sp < 511) stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BOING();
+        L_OP_T:   if (sp < 511) stack[++sp] = tos; tos.type = 0; tos.f = (float)t; BOING();
+        L_OP_LOAD: if (sp < 511) stack[++sp] = tos; tos = vars[inst.val]; BOING();
         L_OP_STORE: vars[inst.val] = tos; tos = stack[sp--]; BOING();
         L_OP_STORE_KEEP: vars[inst.val] = tos; BOING();
         L_OP_POP: tos = stack[sp--]; BOING();
         L_OP_JMP: pc += inst.val - 1; BOING(); 
-        L_OP_PUSH_FUNC: stack[++sp] = tos; tos.type = 1; tos.v = pc + 1; pc += inst.val - 1; BOING(); 
+        L_OP_PUSH_FUNC: if (sp < 511) stack[++sp] = tos; tos.type = 1; tos.v = pc + 1; pc += inst.val - 1; BOING(); 
         L_OP_ASSIGN_VAR: BOING();
         L_OP_DYN_CALL:
         L_OP_DYN_CALL_IF_FUNC:
@@ -317,7 +330,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         
         L_OP_RAND: {
             static uint32_t x_rng = 123456789; x_rng ^= x_rng << 13; x_rng ^= x_rng >> 17; x_rng ^= x_rng << 5;
-            stack[++sp] = tos; tos.type = 0; tos.f = (float)(x_rng & 0xFFFFFF) / 16777216.0f; BOING();
+            if (sp < 511) stack[++sp] = tos; tos.type = 0; tos.f = (float)(x_rng & 0xFFFFFF) / 16777216.0f; BOING();
         }
 
         L_OP_INT: { tos.f = (float)((int32_t)tos.f); BOING(); }
@@ -325,11 +338,9 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         L_OP_LOOP_PREP: {
             int ltype = inst.val; Val func = tos; Val iter = stack[sp--];
             float limit = 0.0f; Val iterable = {0, 0};
-            if (iter.type == 2) {
-                iterable = iter; limit = (float)(iter.v & 0xFFFF);
-            } else if (iter.type == 3) {
-                iterable = iter; limit = iter.f; 
-            } else { limit = iter.f; }
+            if (iter.type == 2) { iterable = iter; limit = (float)(iter.v & 0xFFFF); } 
+            else if (iter.type == 3) { iterable = iter; limit = iter.f; } 
+            else { limit = iter.f; }
             if (loop_sp < 31) { loop_stack[++loop_sp] = {ltype, 0.0f, limit, (int)func.v, 0.0f, sp, iterable, 0.0f}; }
             tos.type = 0; tos.f = 0.0f; BOING();
         }
@@ -338,12 +349,8 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             if (loop_sp >= 0) {
                 LoopState& s = loop_stack[loop_sp];
                 if (s.i >= s.limit) {
-                    if (s.type == 0 || s.type == 3) { 
-                        tos.type = 0; tos.f = s.acc; sp = s.saved_sp; loop_sp--; pc += inst.val - 1; BOING(); 
-                    } else { 
-                        tos.type = 0; tos.f = (s.type == 4) ? s.acc : s.limit; // Filter uses acc for array size
-                        loop_sp--; pc += inst.val - 1; goto L_OP_VEC; 
-                    }
+                    if (s.type == 0 || s.type == 3) { tos.type = 0; tos.f = s.acc; sp = s.saved_sp; loop_sp--; pc += inst.val - 1; BOING(); } 
+                    else { tos.type = 0; tos.f = (s.type == 4) ? s.acc : s.limit; loop_sp--; pc += inst.val - 1; goto L_OP_VEC; }
                 } else {
                     s.saved_sp = sp; if (csp < 511) { call_stack[++csp] = pc; pc = s.f_pc - 1; }
                     float val = s.i; 
@@ -352,12 +359,12 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                         if (s.iterable.type == 2) {
                             int off = s.iterable.v >> 16, sz = s.iterable.v & 0xFFFF;
                             if (idx >= 0 && idx < sz && off + idx < 1024) val = local_array_mem[off + idx];
-                        } else if (s.iterable.type == 3) {
+                        } else if (s.iterable.type == 3 && global_array_capacity > 0) {
                             if (idx >= 0 && idx < global_array_capacity) val = global_array_mem[idx];
                         }
                     }
                     s.current_val = val; 
-                    stack[++sp].type = 0; stack[sp].f = (s.type == 3) ? s.acc : 0.0f; // Push dummy OR accumulator
+                    if (sp < 511) { stack[++sp].type = 0; stack[sp].f = (s.type == 3) ? s.acc : 0.0f; } 
                     tos.type = 0; tos.f = val; 
                 }
             } else { tos.type = 0; tos.f = 0.0f; } BOING();
@@ -366,14 +373,13 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         L_OP_LOOP_DONE: {
             if (loop_sp >= 0) {
                 LoopState& s = loop_stack[loop_sp];
-                if (s.type == 0) { s.acc += tos.f; sp = s.saved_sp; } // SUM (C++ Optimised addition)
-                else if (s.type == 3) { s.acc = tos.f; sp = s.saved_sp; } // REDUCE (Lambda-driven accumulator update)
-                else if (s.type == 4) { // FILTER (Dynamic dropping)
+                if (s.type == 0) { s.acc += tos.f; sp = s.saved_sp; } 
+                else if (s.type == 3) { s.acc = tos.f; sp = s.saved_sp; } 
+                else if (s.type == 4) { 
                     sp = s.saved_sp; 
-                    if (tos.f != 0.0f) { stack[++sp].type = 0; stack[sp].f = s.current_val; s.acc += 1.0f; }
+                    if (tos.f != 0.0f) { if (sp < 511) { stack[++sp].type = 0; stack[sp].f = s.current_val; } s.acc += 1.0f; }
                 }
-                else { sp = s.saved_sp; stack[++sp] = tos; } // GEN & MAP (1:1 Repacking)
-                
+                else { sp = s.saved_sp; if (sp < 511) stack[++sp] = tos; } 
                 s.i += 1.0f; pc -= inst.val - 1;     
             }
             tos.type = 0; tos.f = 0.0f; BOING();
@@ -401,11 +407,18 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     #undef BOING
 }
 
+/**
+ * Executes the VM for a single discrete time step.
+ * @param t The absolute time step
+ * @return The generated audio sample byte
+ */
 uint8_t IRAM_ATTR execute_vm(int32_t t) {
     uint8_t out; execute_vm_block(t, 1, &out); return out;
 }
 
-// --- IMU Data Injector Implementation ---
+/**
+ * Updates IMU variables in the VM state.
+ */
 void updateIMUVars(float ax, float ay, float az, float gx, float gy, float gz) {
     int i_ax = getVarId("ax"); vars[i_ax].type = 0; vars[i_ax].f = sanitize(ax);
     int i_ay = getVarId("ay"); vars[i_ay].type = 0; vars[i_ay].f = sanitize(ay);
@@ -415,9 +428,48 @@ void updateIMUVars(float ax, float ay, float az, float gx, float gy, float gz) {
     int i_gz = getVarId("gz"); vars[i_gz].type = 0; vars[i_gz].f = sanitize(gz);
 }
 
-// --- Mouse Data Injector Implementation ---
+/**
+ * Updates mouse variables in the VM state.
+ */
 void updateMouseVars(float mx, float my, float mv) {
     int i_mx = getVarId("mx"); vars[i_mx].type = 0; vars[i_mx].f = sanitize(mx);
     int i_my = getVarId("my"); vars[i_my].type = 0; vars[i_my].f = sanitize(my);
     int i_mv = getVarId("mv"); vars[i_mv].type = 0; vars[i_mv].f = sanitize(mv);
+}
+
+/**
+ * Ensures the global array has the requested capacity.
+ * @param req_size The required size in float elements
+ */
+void ensure_global_array(int32_t req_size) {
+    if (req_size <= 0 || req_size > 65536) return; 
+    if (req_size > global_array_capacity) {
+        if (global_array_mem) {
+            #if defined(ESP32)
+            heap_caps_free(global_array_mem);
+            #else
+            free(global_array_mem);
+            #endif
+        }
+        #if defined(ESP32)
+        global_array_mem = (float*)heap_caps_malloc(req_size * sizeof(float), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+        #else
+        global_array_mem = (float*)malloc(req_size * sizeof(float));
+        #endif
+        if (global_array_mem) {
+            memset(global_array_mem, 0, req_size * sizeof(float));
+            global_array_capacity = req_size;
+        } else {
+            global_array_capacity = 0;
+        }
+    }
+}
+
+/**
+ * Clears the global array memory.
+ */
+void clear_global_array() {
+    if (global_array_mem && global_array_capacity > 0) {
+        memset(global_array_mem, 0, global_array_capacity * sizeof(float));
+    }
 }
