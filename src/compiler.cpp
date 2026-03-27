@@ -622,15 +622,24 @@ static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy) 
 static int tokenize(const String& input, String* tokens, int max_tokens) {
     int tok_cnt = 0;
     const char* p = input.c_str();
+    
+    String w;
+
+    #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
+        w.reserve(32);     // Cardputer optimization
+    #endif
+
     while (*p && tok_cnt < max_tokens) {
         if (isspace(*p)) p++;
         else if (*p == '&' && isalpha(*(p+1))) {
-            String w = "&"; p++;
+            w = "&"; // Resets length, reuses reserved buffer
+            p++;
             while (isalpha(*p) || isdigit(*p) || *p == '_') w += *p++;
             tokens[tok_cnt++] = w;
         }
         else if (*p == '-' && *(p+1) && !isspace(*(p+1))) {
-            String w = "-"; p++;
+            w = "-"; 
+            p++;
             if (strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p)) { 
                 if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
                     String test = String(*p) + *(p+1);
@@ -644,7 +653,8 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
             tokens[tok_cnt++] = w;
         }
         else if (*p == '\'') {
-            String w = "'"; p++;
+            w = "'"; 
+            p++;
             while (*p && *p != '\'') w += *p++;
             if (*p == '\'') { w += "'"; p++; }
             tokens[tok_cnt++] = w;
@@ -663,7 +673,7 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
             if (*p != ',') tokens[tok_cnt++] = String(*p); 
             p++;
         } else {
-            String w = "";
+            w = ""; // Clear buffer for general words/numbers
             while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p) && *p != '\'') { 
                 w += *p++;
                 if ((w.endsWith("e") || w.endsWith("E")) && (*p == '+' || *p == '-')) { w += *p++; }
