@@ -2,6 +2,7 @@
 #include <ESPmDNS.h>
 #include <esp_task_wdt.h> 
 #include <nvs_flash.h> 
+#include "ble_keyboard.h"
 #include "state.h"
 #include "vm.h"
 #include "fast_math.h"
@@ -10,14 +11,18 @@
 #include "fasti2s.h" 
 #include "sync.h"
 
+// --- Global System Configuration ---
 const bool WIPE_NVRAM = false; 
 const bool FORCE_REWRITE_PRESETS = true;
+
+// --- Global Sync State ---
 bool is_sync_master = false;
 bool is_sync_initialized = false;
 volatile bool pending_code_update = false;
 char pending_code_buffer[2048] = {0};
 uint8_t pending_flags = 0;
 
+// --- UI Visualization Buffer ---
 #define UI_RING_SIZE 4096
 volatile uint8_t ui_sample_ring[UI_RING_SIZE];
 volatile int32_t ui_t_ring[UI_RING_SIZE];
@@ -26,6 +31,11 @@ uint32_t ui_ring_tail = 0;
 
 FastI2S audioOut;
 
+/**
+ * Core 1 DSP Task. Generates Bytebeat/Floatbeat audio via VM,
+ * performs DC offset removal, and scales volume.
+ * @param pvParameters FreeRTOS task params
+ */
 void IRAM_ATTR playBytebeat(void *pvParameters) {
     int16_t pcm_buffer[AUDIO_BUF_SIZE * 2]; 
     uint8_t block_buf[AUDIO_BUF_SIZE];
@@ -54,7 +64,9 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                     if (++ui_tick >= mod) {
                         ui_tick = 0;
                         wave_buf[wave_ptr] = sample; 
-                        if (++wave_ptr >= 240) wave_ptr = 0; 
+                        if (++wave_ptr >= 240) {
+                            wave_ptr = 0; 
+                        }
                     }
                 } else if (current_vis != VIS_HISTORY) {
                     uint32_t h = ui_ring_head;
@@ -92,6 +104,9 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
     }
 }
 
+/**
+ * Updates UI and evaluator state based on compilation results.
+ */
 void applyCompilationResult(bool valid, String prefix = "") {
     if (valid) {
         is_playing = true;
@@ -103,6 +118,9 @@ void applyCompilationResult(bool valid, String prefix = "") {
     status_timer = millis() + 1500;
 }
 
+/**
+ * Handles incoming audio history for the persistent visualizers.
+ */
 void processUIRingBuffer() {
     int processed = 0;
     while (ui_ring_tail != ui_ring_head && processed < 4000) {
@@ -115,8 +133,10 @@ void processUIRingBuffer() {
     }
 }
 
+/**
+ * Core 0 UI/Input Task. Handles Keyboard, IMU, Screen, and Networking.
+ */
 void uiTask(void *pvParameters) {
-    
     static uint32_t last_imu_poll = 0; 
 
     while(1) {
@@ -155,17 +175,34 @@ void uiTask(void *pvParameters) {
         
         auto st = M5Cardputer.Keyboard.keysState();
         
-        if (st.opt) snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
-        else if (st.alt) snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
-        else if (st.ctrl) snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
-        else if (st.fn) strncpy(current_top_text, "FN: W/T/S/F/L/M/R/Arr/+-", 63); // Added R here
-        else strncpy(current_top_text, "BYTEBED", 63); 
+        // --- Status Bar UI Logic ---
+        if (st.opt) {
+            snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
+        } else if (st.alt) {
+            snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
+        } else if (st.ctrl) {
+            snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
+        } else if (st.fn) {
+            strncpy(current_top_text, "FN: B/W/T/S/F/L/M/R/Arr", 63); 
+        } else {
+            strncpy(current_top_text, "BYTEBED", 63); 
+        }
         current_top_text[63] = '\0'; 
 
+        // --- Main Keyboard Logic ---
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             
-            // 1. BANK SWITCHING
+            // 1. SYSTEM COMMANDS & BANK SWITCHING (CTRL)
             if (st.ctrl) {
+                // BLE Overwrites
+                if (M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A')) {
+                    syncPatchToBLE();
+                }
+                if (M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R')) {
+                    sendBLECombo('r');
+                }
+
+                // Bank switching logic
                 const char* ctrl_symbols = ")!@#$%^&*("; 
                 bool bankChanged = false;
 
@@ -200,15 +237,27 @@ void uiTask(void *pvParameters) {
                         broadcastPlay(0); 
                     }
                     
+                    syncPatchToBLE();
                     goto end_keyboard_logic;
                 }
 
+                // Undo
                 if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
                     int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
-                    if (undo_stack[prev] != "") { undo_ptr = prev; input_buffer = undo_stack[undo_ptr]; cursor_pos = input_buffer.length(); } 
+                    if (undo_stack[prev] != "") { 
+                        undo_ptr = prev; 
+                        input_buffer = undo_stack[undo_ptr]; 
+                        cursor_pos = input_buffer.length(); 
+                        sendBLECombo('z');
+                    } 
                 }
+                // Redo
                 if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
-                    if (undo_ptr != undo_max) { undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; input_buffer = undo_stack[undo_ptr]; cursor_pos = input_buffer.length(); } 
+                    if (undo_ptr != undo_max) { 
+                        undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
+                        input_buffer = undo_stack[undo_ptr]; 
+                        cursor_pos = input_buffer.length(); 
+                    } 
                 }
             } 
             
@@ -234,6 +283,8 @@ void uiTask(void *pvParameters) {
                             broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT);
                             broadcastPlay(0); 
                         }
+
+                        syncPatchToBLE();
                     }
                 }
             } 
@@ -261,6 +312,7 @@ void uiTask(void *pvParameters) {
             
             // 4. FN COMMANDS
             else if (st.fn) {
+                // Networking & Swarm Sync
                 if (M5Cardputer.Keyboard.isKeyPressed('l') || M5Cardputer.Keyboard.isKeyPressed('L')) {
                     if (is_streaming) { WiFi.softAPdisconnect(true); is_streaming = false; delay(50); }
                     if (!is_sync_initialized) { initESPNowSync(); is_sync_initialized = true; }
@@ -287,38 +339,58 @@ void uiTask(void *pvParameters) {
                     status_timer = millis() + 1500;
                 }
 
+                // Bluetooth Toggle
+                if (M5Cardputer.Keyboard.isKeyPressed('b') || M5Cardputer.Keyboard.isKeyPressed('B')) {
+                    ble_active = !ble_active;
+                    if (ble_active) bleKeyboard.begin(); else bleKeyboard.end();
+                    status_msg = ble_active ? "BLE START" : "BLE STOP"; 
+                    status_timer = millis() + 1500;
+                }
+
                 // RESET TIMELINE
                 if (M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R')) {
                     t_raw = 0;
                     status_msg = "TIMELINE RESET";
                     status_timer = millis() + 1500;
-                    
                     if (is_sync_master) {
                         broadcastPlay(0);
                     }
                 }
 
                 if (M5Cardputer.Keyboard.isKeyPressed('w') || M5Cardputer.Keyboard.isKeyPressed('W')) {
-                    if (is_sync_initialized) { esp_now_deinit(); WiFi.disconnect(true); is_sync_initialized = false; is_sync_master = false; delay(50); }
+                    if (is_sync_initialized) { 
+                        esp_now_deinit(); 
+                        WiFi.disconnect(true); 
+                        is_sync_initialized = false; 
+                        is_sync_master = false; 
+                        delay(50); 
+                    }
                     if (!is_streaming) {
                         WiFi.persistent(false); 
                         WiFi.mode(WIFI_AP);
                         WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
                         if (WiFi.softAP("BYTEBED")) {
                             MDNS.begin("bytebed"); 
-                            is_streaming = true; initBytebeatServer();
+                            is_streaming = true; 
+                            initBytebeatServer();
                             xTaskCreatePinnedToCore(startDnsHijack, "DNS", 2048, NULL, 1, NULL, 1);
                             status_msg = "WIFI ACTIVE";
                         }
                     } else { 
-                        WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF); is_streaming = false; status_msg = "WIFI OFF"; 
+                        WiFi.softAPdisconnect(true); 
+                        WiFi.mode(WIFI_OFF); 
+                        is_streaming = false; 
+                        status_msg = "WIFI OFF"; 
                     }
                     status_timer = millis() + 1500;
                 }
                 
+                // General Settings
                 if (M5Cardputer.Keyboard.isKeyPressed('t') || M5Cardputer.Keyboard.isKeyPressed('T')) { 
-                    current_theme_idx = (current_theme_idx + 1) % 3; bg_sprite.fillScreen(theme.bg); 
+                    current_theme_idx = (current_theme_idx + 1) % 3; 
+                    bg_sprite.fillScreen(theme.bg); 
                 }
+                
                 if (M5Cardputer.Keyboard.isKeyPressed('s') || M5Cardputer.Keyboard.isKeyPressed('S')) { 
                     if (current_sample_rate == 8000) current_sample_rate = 11025;
                     else if (current_sample_rate == 11025) current_sample_rate = 22050;
@@ -330,17 +402,18 @@ void uiTask(void *pvParameters) {
                     status_msg = "RATE: " + String(current_sample_rate) + "Hz";
                     status_timer = millis() + 1500;
                 }
+                
                 if (M5Cardputer.Keyboard.isKeyPressed('f') || M5Cardputer.Keyboard.isKeyPressed('F')) {
                     current_play_mode = (current_play_mode == MODE_BYTEBEAT) ? MODE_FLOATBEAT : MODE_BYTEBEAT;
-                    
                     var_count = 0; 
                     memset(vars, 0, sizeof(vars));
                     clear_global_array(); 
-                    
                     bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
                     status_msg = (current_play_mode == MODE_BYTEBEAT) ? "MODE: BYTEBEAT" : "MODE: FLOATBEAT";
                     status_timer = millis() + 1500;
                 }
+
+                // Visualizer selection & UI Mapping
                 if (M5Cardputer.Keyboard.isKeyPressed('1')) { current_vis = VIS_WAV_WIRE; bg_sprite.fillScreen(theme.bg); }
                 if (M5Cardputer.Keyboard.isKeyPressed('2')) { current_vis = VIS_DIA_AMP;  bg_sprite.fillScreen(theme.bg); }
                 if (M5Cardputer.Keyboard.isKeyPressed('3')) { current_vis = VIS_DIA_BIT;  bg_sprite.fillScreen(theme.bg); }
@@ -348,53 +421,109 @@ void uiTask(void *pvParameters) {
                 if (M5Cardputer.Keyboard.isKeyPressed('0')) { current_vis = VIS_HISTORY; }
                 if (M5Cardputer.Keyboard.isKeyPressed('=')) { drawScale = std::min(10, drawScale + 1); bg_sprite.fillScreen(theme.bg); }
                 if (M5Cardputer.Keyboard.isKeyPressed('-')) { drawScale = std::max(0, drawScale - 1); bg_sprite.fillScreen(theme.bg); }
-                if (M5Cardputer.Keyboard.isKeyPressed(';')) { volume_perc = std::min(1.0f, volume_perc + VOL_STEP); }
-                if (M5Cardputer.Keyboard.isKeyPressed('.')) { volume_perc = std::max(0.0f, volume_perc - VOL_STEP); }
-                if (M5Cardputer.Keyboard.isKeyPressed(',')) { if (cursor_pos > 0) cursor_pos--; }
-                if (M5Cardputer.Keyboard.isKeyPressed('/')) { if (cursor_pos < (int)input_buffer.length()) cursor_pos++; }
+                if (M5Cardputer.Keyboard.isKeyPressed(';')) { 
+                    volume_perc = std::min(1.0f, volume_perc + VOL_STEP); 
+                }
+                if (M5Cardputer.Keyboard.isKeyPressed('.')) { 
+                    volume_perc = std::max(0.0f, volume_perc - VOL_STEP);
+                }
+                if (M5Cardputer.Keyboard.isKeyPressed(',')) { 
+                    if (cursor_pos > 0) cursor_pos--; 
+                    if (ble_active) bleKeyboard.write(216); 
+                }
+                if (M5Cardputer.Keyboard.isKeyPressed('/')) { 
+                    if (cursor_pos < (int)input_buffer.length()) cursor_pos++; 
+                    if (ble_active) bleKeyboard.write(215); 
+                }
+
                 if (M5Cardputer.Keyboard.isKeyPressed('`')) { 
-                    is_playing = false; t_raw = 0; input_buffer = ""; cursor_pos = 0; bg_sprite.fillScreen(theme.bg); 
-                    if(is_sync_master) broadcastStop(); 
+                    is_playing = false; 
+                    t_raw = 0; 
+                    input_buffer = ""; 
+                    cursor_pos = 0; 
+                    bg_sprite.fillScreen(theme.bg); 
+                    if (is_sync_master) broadcastStop(); 
                 }
             } 
             
             // 5. STANDARD TYPING
             else {
                 if (st.word.size() > 0) {
-                    for (auto i : st.word) { input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); cursor_pos++; }
+                    for (auto i : st.word) { 
+                        // Ignore non-typable control characters
+                        if (i == '\b' || i == '\r' || i == '\n' || i == '\t') continue; 
+                        input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); 
+                        cursor_pos++; 
+                        
+                        if (ble_active && bleKeyboard.isConnected()) {
+                            bleKeyboard.print(i);
+                        }
+                    }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
-                    rpn_mode = !rpn_mode; input_buffer = decompile(rpn_mode); cursor_pos = input_buffer.length();
+                    rpn_mode = !rpn_mode; 
+                    input_buffer = decompile(rpn_mode); 
+                    cursor_pos = input_buffer.length();
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                    saveUndo(); bg_sprite.fillScreen(theme.bg); 
+                    saveUndo(); 
+                    bg_sprite.fillScreen(theme.bg); 
                     bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false); 
                     applyCompilationResult(valid);
+                    
+                    if (ble_active) {
+                        bleKeyboard.write(176); 
+                    }
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-                    if (cursor_pos > 0) { input_buffer.remove(cursor_pos - 1, 1); cursor_pos--; }
+                    if (cursor_pos > 0) { 
+                        input_buffer.remove(cursor_pos - 1, 1); 
+                        cursor_pos--; 
+                    }
+                    if (ble_active) {
+                        bleKeyboard.write(178); 
+                    }
                 }
             }
         }
         
         end_keyboard_logic:
-        if (millis() - last_draw > UI_REFRESH_MS) { draw(); last_draw = millis(); }
+        if (millis() - last_draw > UI_REFRESH_MS) { 
+            draw(); 
+            last_draw = millis(); 
+        }
         vTaskDelay(pdMS_TO_TICKS(10));
     }
 }
 
+/**
+ * Standard Setup. Initializes Hardware, Math, NVS Presets, and dual tasks.
+ */
 void setup() {
-    if (WIPE_NVRAM) { nvs_flash_erase(); nvs_flash_init(); }
+    if (WIPE_NVRAM) { 
+        nvs_flash_erase(); 
+        nvs_flash_init(); 
+    }
+    
     auto cfg = M5.config(); 
     M5Cardputer.begin(cfg, true); 
     M5.update();
+    
     input_buffer.reserve(2048);
-    canvas.setColorDepth(8); canvas.createSprite(240, 135); 
-    bg_sprite.setColorDepth(8); bg_sprite.createSprite(240, 135); bg_sprite.fillScreen(theme.bg);
+    canvas.setColorDepth(8); 
+    canvas.createSprite(240, 135); 
+    bg_sprite.setColorDepth(8); 
+    bg_sprite.createSprite(240, 135); 
+    bg_sprite.fillScreen(theme.bg);
+    
     init_fast_math(); 
     
     WiFi.persistent(false); 
-    WiFi.mode(WIFI_STA); WiFi.disconnect(); 
-    M5.Speaker.begin(); M5.Speaker.end(); M5.Mic.end();     
+    WiFi.mode(WIFI_STA); 
+    WiFi.disconnect(); 
+    M5.Speaker.begin(); 
+    M5.Speaker.end(); 
+    M5.Mic.end();     
     
     prefs.begin("bytebeat", false);
+    
     for (int b = 0; b < 10; b++) {
         for (int i = 0; i < 10; i++) {
             const PresetConfig* defaultPreset = &defaultBanks[b][i];
@@ -450,4 +579,6 @@ void setup() {
     xTaskCreatePinnedToCore(uiTask, "ui_task", 8192, NULL, 5, NULL, 0);
 }
 
-void loop() { vTaskDelay(portMAX_DELAY); }
+void loop() { 
+    vTaskDelay(portMAX_DELAY); 
+}

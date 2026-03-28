@@ -729,11 +729,6 @@ window.addEventListener('keydown', (e) => {
     }
     if (e.key === "Escape") togglePlay();
     
-    if (e.shiftKey && e.code === "Digit1") { e.preventDefault(); setVisMode(0); }
-    if (e.shiftKey && e.code === "Digit2") { e.preventDefault(); setVisMode(1); }
-    if (e.shiftKey && e.code === "Digit3") { e.preventDefault(); setVisMode(2); }
-    if (e.shiftKey && e.code === "Digit4") { e.preventDefault(); setVisMode(3); }
-
     if (e.ctrlKey || e.metaKey) {
         if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomIn(); }
         if (e.key === "-") { e.preventDefault(); zoomOut(); }
