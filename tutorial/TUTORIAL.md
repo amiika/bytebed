@@ -27,13 +27,14 @@ n=2**((m+70)/12),
 # Part 2: PWM
 
 We turn that ramp into a Square Wave with Pulse-Width Modulation. The duty cycle (the "thinness" of the sound) will shift over 8 seconds.
+
 t/=48000, 
 m='0004445555221225555'[t*4.3],
 n=2**((m+70)/12), 
 o=(t*n%1 > t/8%1*.25+.2) ? .54 : -.54
 
 # Part 3: Kick
-Phase 3: The Electronic Kick Drum
+
 Before we add the filter, let’s build the percussion. This uses a high-frequency sine wave that "drops" its pitch exponentially every time the beat resets.
 
 t/=48000, 
@@ -44,29 +45,27 @@ kick
 
 Now we add the state variables v0 and v1. This is a classic integrator. The variable c controls the cutoff frequency.
 
-JavaScript
 t/=48000, 
 m='0004445555221225555'[t*4.3],
 n=2**((m+70)/12), 
 o=(t*n%1 > t/8%1*.25+.2) ? .54 : -.54,
-c=.15, // Static cutoff for now
+c=.15, 
 v0+=c*(o-v1-.4*v0),
 v1+=v0,
-v1 // This is the filtered synth output
+v1
 
 # Part 5: Modulation
 
 We add the LFO (Low Frequency Oscillator) to the filter cutoff c to give it that "wah-wah" movement and mix in the kick drum.
 
-JavaScript
 t/=48000, 
 m='0004445555221225555'[t*4.3],
 n=2**((m+70)/12), 
 o=(t*n%1 > t/8%1*.25+.2) ? .54 : -.54,
-c=.15 + .1*s(t*.5), // Filter sweeps slowly
+c=.15 + .1*s(t*.5),
 v0+=c*(o-v1-.4*v0),
 v1+=v0,
-.3*s((t*4.3%2+.01)**0.4*300) + v1 // Kick + Synth
+.3*s((t*4.3%2+.01)**0.4*300) + v1 
 
 
 
@@ -104,3 +103,14 @@ g=2**((m+60)/12),
 b=n=>{sin(t*6000)*((1-(t*n%1))**12)},
 b1=b(2),b2=b(8.01),b3=b(2.1),
 ((t*g%1)-.5) * .4 + k * .4 + (b1+b2+b3) * .31
+
+
+
+# Kick machine (hcdphobe)
+
+f=x=>x/256%1,
+q=x=>(f(x)-.5)*2,
+y=t*.845/1.5,
+h=m=>q((((y&1)-1&&48)+64*random()+.5)*(32-t*m/256%32)/14/2+t*m/32%256/4+64)*2,
+k=m=>sin(cbrt(t%8192)*8),
+s=m=>(sin(t*1.2>>3)*t&255)*(8192-t*m%8192)/8192**1.54-1+f(t*m/32),[k(1),h(1),s(1),h(1),k(1),s(1),k(1),s(1),k(1),h(1),s(1),0,k(1),h(1),s(1),0][int(t/2**13)%16]

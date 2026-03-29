@@ -37,6 +37,7 @@ Controls & Modes:
 # TODO / IDEAS
 
 - Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp.
+- Some bytebeat / floatbeat tutorial
 
 # Development
 
