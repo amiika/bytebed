@@ -1,22 +1,52 @@
 # Bytebed - Embedded Bytebeats
 
-Woop woop. It beeps! Now with floatbeat!
+Bytebeat virtual machine for M5Stack Cardputers.
 
-# Features
+Running bytebeat on ESP32 boards can be simple as:
+
+```
+#include <ESP_I2S.h>
+
+I2SClass i2s;
+int t = 0;
+
+void setup() {
+  i2s.setPins(41, 43, 42); 
+  i2s.begin(I2S_MODE_STD, 8000, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_STEREO);
+}
+
+void loop() {
+
+  uint8_t b = (t>>7|t|t>>6)*10+4*(t&t>>13|t>>6);
+
+  int16_t s = (b - 128) * 50; 
+  uint32_t frame = (s & 0xFFFF) | (s << 16);
+  i2s.write((uint8_t*)&frame, 4); 
+  
+  t++;
+}
+```
+
+Just upload this and boom! You have some bytebeats going on. If you are happy with this do not bother reading further. Just be happy.
+
+However ... If you want to program bytebeat and floatbeat on the fly on your tiny winey cardputer ... Keep on reading, I suppose.
+
+# Bytebed features
+
++ On the fly playing and visualization
 + Classic C-style bytebeats
-+ Infix and RPN compiler & bytecode vm
-+ Bytecode decompiler (changes between Infix & RPN via tab)
-+ Syntax validator (Prevents crashes)
++ Opionated floatbeat support
++ Infix and postfix syntax compiler decompiler
++ Syntax validator
 + Global variables
 + Custom function support
 + Variable chaining and array support
-+ Some sort of floatbeat support
 
 # Variables & functions
 
 + All math: sin/s, cos/c, floor, int, cbrt and constants like pi, e ... etc ...
-+ Accelerometer: ax, ay, az
-+ Gyroscope: gx, gy, gz
++ Accelerometer: ax, ay, az (Cardputer ADV only)
++ Gyroscope: gx, gy, gz (Cardputer ADV only)
 + Mouse (for wasm): mx, my, mv (velocity)
 
 # Controls & Modes
@@ -37,7 +67,8 @@ Woop woop. It beeps! Now with floatbeat!
 
 # TODO / IDEAS
 
-- Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp.
+- Publish in M5Burner?
+- Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp
 - Some bytebeat / floatbeat tutorial
 
 # Development
