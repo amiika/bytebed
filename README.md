@@ -2,9 +2,7 @@
 
 Woop woop. It beeps! Now with floatbeat!
 
-# DONE
-
-Features:
+# Features
 + Classic C-style bytebeats
 + Infix and RPN compiler & bytecode vm
 + Bytecode decompiler (changes between Infix & RPN via tab)
@@ -14,13 +12,15 @@ Features:
 + Variable chaining and array support
 + Some sort of floatbeat support
 
-Variables & functions:
+# Variables & functions
+
 + All math: sin/s, cos/c, floor, int, cbrt and constants like pi, e ... etc ...
 + Accelerometer: ax, ay, az
 + Gyroscope: gx, gy, gz
 + Mouse (for wasm): mx, my, mv (velocity)
 
-Controls & Modes:
+# Controls & Modes
+
 + ctrl + 0-9: Select bank (Presets & User patches)
 + opt + 0-9: Load patch from current bank
 + alt + 0-9: Save patch to location
@@ -33,6 +33,7 @@ Controls & Modes:
 + fn + w: Wifi sync (Captive portal & bytebeat.local)
 + fn + l: Slave mode: Listen (ESP-NOW sync mode)
 + fn + m: Master mode: Sync (ESP-NOW sync mode)
++ fn + b: Bluetooth keyboard
 
 # TODO / IDEAS
 
