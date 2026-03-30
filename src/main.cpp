@@ -113,7 +113,7 @@ void applyCompilationResult(bool valid, String prefix = "") {
         active_eval_formula = rpn_mode ? decompile(false) : input_buffer; 
         status_msg = prefix + "OK"; 
     } else {
-        status_msg = prefix + "ERR"; 
+        status_msg = prefix + (last_vm_error != "" ? last_vm_error : "ERR"); 
     }
     status_timer = millis() + 1500;
 }
@@ -435,7 +435,6 @@ void uiTask(void *pvParameters) {
                     if (cursor_pos < (int)input_buffer.length()) cursor_pos++; 
                     if (ble_active) bleKeyboard.write(215); 
                 }
-
                 if (M5Cardputer.Keyboard.isKeyPressed('`')) { 
                     is_playing = false; 
                     t_raw = 0; 
@@ -448,17 +447,12 @@ void uiTask(void *pvParameters) {
             
             // 5. STANDARD TYPING
             else {
-                if (st.word.size() > 0) {
-                    for (auto i : st.word) { 
-                        // Ignore non-typable control characters
-                        if (i == '\b' || i == '\r' || i == '\n' || i == '\t') continue; 
-                        input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); 
-                        cursor_pos++; 
-                        
-                        if (ble_active && bleKeyboard.isConnected()) {
-                            bleKeyboard.print(i);
-                        }
-                    }
+                if (M5Cardputer.Keyboard.isKeyPressed('`')) { 
+                    is_playing = false; 
+                    t_raw = 0; 
+                    status_msg = "STOPPED";
+                    status_timer = millis() + 1500;
+                    if (is_sync_master) broadcastStop(); 
                 } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
                     rpn_mode = !rpn_mode; 
                     input_buffer = decompile(rpn_mode); 
@@ -479,6 +473,17 @@ void uiTask(void *pvParameters) {
                     }
                     if (ble_active) {
                         bleKeyboard.write(178); 
+                    }
+                } else if (st.word.size() > 0) {
+                    for (auto i : st.word) { 
+                        // Ignore non-typable control characters AND the backtick (since it's acting as STOP)
+                        if (i == '\b' || i == '\r' || i == '\n' || i == '\t' || i == '`') continue; 
+                        input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); 
+                        cursor_pos++; 
+                        
+                        if (ble_active && bleKeyboard.isConnected()) {
+                            bleKeyboard.print(i);
+                        }
                     }
                 }
             }

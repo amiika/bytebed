@@ -1,6 +1,14 @@
 #include "compiler.h"
 #include <memory>
 
+extern String last_vm_error;
+
+#if defined(__EMSCRIPTEN__) || defined(NATIVE_BUILD)
+    #define P_ERR(shortMsg, longMsg) do { last_vm_error = String(longMsg); return false; } while(0)
+#else
+    #define P_ERR(shortMsg, longMsg) do { last_vm_error = String(shortMsg); return false; } while(0)
+#endif
+
 /**
  * Compiles an infix formula into VM bytecode.
  * @param input The infix expression to compile
@@ -9,6 +17,7 @@
  */
 bool compileInfix(String input, bool reset_t) {
     initCompilerState();
+    last_vm_error = "";
     
     uint8_t target = 1 - active_bank; memset(program_bank[target], 0, sizeof(Instruction) * 512);
     
@@ -33,7 +42,8 @@ bool compileInfix(String input, bool reset_t) {
     #endif
 
     while (*p) {
-        if (len >= 512 || ot >= 255) return false; 
+        if (len >= 512) P_ERR("ERR: PROG>512", "Compile Error: Program exceeds 512 instructions");
+        if (ot >= 255) P_ERR("ERR: OT>255", "Compile Error: Operator stack overflow (formula too complex)");
         
         if (*p == ')' || *p == ',' || *p == ';' || *p == ']') {
             while (ol_ptr >= 0) {
@@ -59,7 +69,8 @@ bool compileInfix(String input, bool reset_t) {
         if (isspace(*p)) { p++; continue; }
         
         if (isdigit(*p) || (*p == '.' && isdigit(*(p+1)))) { 
-            if (expect_op) return false; expect_op = true;
+            if (expect_op) P_ERR("ERR: .?", "Compile Error: Expected operator before number");
+            expect_op = true;
             program_bank[target][len++] = {OP_VAL, setF(strtof(p, (char**)&p))}; 
         }
         else if (isalpha(*p)) { 
@@ -69,10 +80,14 @@ bool compileInfix(String input, bool reset_t) {
             
             bool is_math = false;
             for (int _m = 0; _m < mathLibrarySize; _m++) { 
-                if (wordBuffer == mathLibrary[_m].name) { if (expect_op) return false; expect_op = false; os[++ot] = mathLibrary[_m].code; os_id[ot] = 0; is_math = true; break; } 
+                if (wordBuffer == mathLibrary[_m].name) { 
+                    if (expect_op) P_ERR("ERR: "+wordBuffer, "Compile Error: Expected operator before function '" + wordBuffer + "'");
+                    expect_op = false; os[++ot] = mathLibrary[_m].code; os_id[ot] = 0; is_math = true; break; 
+                } 
             }
             if (!is_math && (wordBuffer == "sum" || wordBuffer == "gen" || wordBuffer == "map" || wordBuffer == "reduce" || wordBuffer == "filter")) {
-                if (expect_op) return false; expect_op = false; 
+                if (expect_op) P_ERR("ERR: "+wordBuffer, "Compile Error: Expected operator before iterator '" + wordBuffer + "'");
+                expect_op = false; 
                 os[++ot] = OP_LOOP_PREP; 
                 int ltype = 0; if (wordBuffer == "gen") ltype = 1; else if (wordBuffer == "map") ltype = 2; else if (wordBuffer == "reduce") ltype = 3; else if (wordBuffer == "filter") ltype = 4;
                 os_id[ot] = ltype; 
@@ -84,7 +99,8 @@ bool compileInfix(String input, bool reset_t) {
                 if (*temp2 == '(') {
                     for (int _s = 0; _s < shorthandsSize; _s++) {
                         if (wordBuffer == shorthands[_s].name) {
-                            if (expect_op) return false; expect_op = false; os[++ot] = shorthands[_s].code; os_id[ot] = 0; is_math = true; break;
+                            if (expect_op) P_ERR("ERR: "+wordBuffer, "Compile Error: Expected operator before shorthand '" + wordBuffer + "'");
+                            expect_op = false; os[++ot] = shorthands[_s].code; os_id[ot] = 0; is_math = true; break;
                         }
                     }
                 }
@@ -93,7 +109,7 @@ bool compileInfix(String input, bool reset_t) {
             
             const char* temp = p; while (isspace(*temp)) temp++;
             if (*temp == '=' && *(temp+1) == '>') {
-                if (expect_op) return false;
+                if (expect_op) P_ERR("ERR: =>", "Compile Error: Unexpected '=>' after variable");
                 int pid = getVarId(wordBuffer); int start_pc = len;
                 program_bank[target][len++] = {OP_PUSH_FUNC, 0}; program_bank[target][len++] = {OP_BIND, (int32_t)pid};
                 
@@ -108,13 +124,14 @@ bool compileInfix(String input, bool reset_t) {
             }
 
             int id = getVarId(wordBuffer); while (isspace(*p)) p++;
-            if (expect_op) return false; 
+            if (expect_op) P_ERR("ERR: "+wordBuffer, "Compile Error: Expected operator before variable '" + wordBuffer + "'");
 
             if (*p == '(') { os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; } 
             else { program_bank[target][len++] = {OP_LOAD, (int32_t)id}; expect_op = true; }
         }
         else if (*p == '\'') {
-            if (expect_op) return false; p++; int count = 0;
+            if (expect_op) P_ERR("ERR: \'", "Compile Error: Expected operator before string literal");
+            p++; int count = 0;
             while (*p && *p != '\'') { 
                 char c = *p; float val;
                 if (c >= '0' && c <= '9') val = c - '0';
@@ -128,7 +145,7 @@ bool compileInfix(String input, bool reset_t) {
             expect_op = true;
         }
         else if (*p == '$' && *(p+1) == '[') {
-            if (expect_op) return false;
+            if (expect_op) P_ERR("ERR: ?=$", "Compile Error: Expected operator before allocation '$['");
             os[++ot] = OP_NONE; paren_depth++; if (bt_ptr < 127) bracket_types[++bt_ptr] = 3; 
             p += 2; expect_op = false;
         }
@@ -156,7 +173,7 @@ bool compileInfix(String input, bool reset_t) {
             p++; expect_op = false; 
         }
         else if (*p == ')') { 
-            if (paren_depth <= 0 || (bt_ptr >= 0 && bracket_types[bt_ptr] != 0)) return false; 
+            if (paren_depth <= 0 || (bt_ptr >= 0 && bracket_types[bt_ptr] != 0)) P_ERR("ERR: (", "Compile Error: Unmatched closing parenthesis ')'"); 
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); 
             int args = 0; if (cac_ptr >= 0) args = call_arg_counts[cac_ptr--]; 
             if (bt_ptr >= 0) bt_ptr--;
@@ -219,7 +236,7 @@ bool compileInfix(String input, bool reset_t) {
             p++;
         }
         else if (*p == ']') {
-            if (paren_depth <= 0 || bt_ptr < 0) return false;
+            if (paren_depth <= 0 || bt_ptr < 0) P_ERR("ERR: [", "Compile Error: Unmatched closing bracket ']'");
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true);
             if (ot >= 0) ot--; 
             int btype = bracket_types[bt_ptr--];
@@ -237,7 +254,7 @@ bool compileInfix(String input, bool reset_t) {
             paren_depth--; p++;
         }
         else if (*p == '.') {
-            if (!expect_op) return false; 
+            if (!expect_op) P_ERR("ERR: .", "Compile Error: Unexpected '.' operator");
             p++;
             wordBuffer = "";
             while (isalpha(*p) || isdigit(*p) || *p == '_') wordBuffer += *p++;
@@ -251,10 +268,10 @@ bool compileInfix(String input, bool reset_t) {
                 os_id[ot] = ltype;
                 expect_op = false; 
             } else {
-                return false; 
+                P_ERR("ERR: ."+wordBuffer, "Compile Error: Unrecognized array method '." + wordBuffer + "'");
             }
         }
-        else if (*p == '{') { return false; } 
+        else if (*p == '{') { P_ERR("ERR: {", "Compile Error: Unexpected opening brace '{'"); } 
         else if (*p == '}') {
             if (ol_ptr >= 0 && open_lambdas[ol_ptr].uses_braces) {
                 auto& lam = open_lambdas[ol_ptr];
@@ -269,24 +286,27 @@ bool compileInfix(String input, bool reset_t) {
                 program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
                 for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
                 ol_ptr--; p++; expect_op = true; 
-            } else return false;
+            } else P_ERR("ERR: {", "Compile Error: Unmatched closing brace '}'");
         }
         else if (*p == '?') { 
-            if (!expect_op) return false; expect_op = false;
+            if (!expect_op) P_ERR("ERR: ?", "Compile Error: Unexpected ternary '?' operator"); 
+            expect_op = false;
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, getPrecedence(OP_COND) + 1, true); 
             os[++ot] = OP_COND; cond_depth++; p++; program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
             if (cs_ptr < 127) cond_starts[++cs_ptr] = len - 1;
         }
         else if (*p == ':') { 
-            if (!expect_op) return false; expect_op = false; if (cond_depth <= 0) return false; 
+            if (!expect_op) P_ERR("ERR: :", "Compile Error: Unexpected ternary ':' operator"); 
+            expect_op = false; 
+            if (cond_depth <= 0) P_ERR("ERR: ?", "Compile Error: Unmatched ':' (missing '?')"); 
             
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_COND, -1, true); 
             
-            if (ot < 0 || os[ot] != OP_COND) return false;
+            if (ot < 0 || os[ot] != OP_COND) P_ERR("ERR: ?", "Compile Error: Invalid ternary operation structure");
             os[ot] = OP_COLON;
             
             program_bank[target][len++] = {OP_RET, 0}; 
-            if (cs_ptr < 0) return false;
+            if (cs_ptr < 0) P_ERR("ERR: ?", "Compile Error: Ternary condition stack underflow");
             int start = cond_starts[cs_ptr--];
             program_bank[target][start].val = (int32_t)(len - start); 
             
@@ -297,7 +317,8 @@ bool compileInfix(String input, bool reset_t) {
         }
         else if (*p == ';') { expect_op = false; flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); program_bank[target][len++] = {OP_POP, 0}; p++; }
         else if (*p == ',') { 
-            if (!expect_op) return false; expect_op = false; 
+            if (!expect_op) P_ERR("ERR: ,", "Compile Error: Unexpected comma ','"); 
+            expect_op = false; 
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); 
             
             bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_LOOP_PREP));
@@ -312,7 +333,7 @@ bool compileInfix(String input, bool reset_t) {
             if (len > 0 && program_bank[target][len - 1].op == OP_AT) {
                 len--; os[++ot] = OP_STORE_AT; os_id[ot] = 0; p++; expect_op = false;
             } else {
-                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, OP_ASSIGN_VAR)) return false;
+                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, OP_ASSIGN_VAR)) P_ERR("ERR: ?=", "Compile Error: Invalid left-hand side in assignment '='");
                 p++; expect_op = false;
             }
         }
@@ -320,7 +341,7 @@ bool compileInfix(String input, bool reset_t) {
             OpCode compOp;
             int adv = 0;
             if (parseCompoundOperator(p, compOp, adv)) {
-                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, compOp)) return false;
+                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, compOp)) P_ERR("ERR: =?", "Compile Error: Invalid left-hand side in compound assignment");
                 p += adv; 
                 expect_op = false;
             } else {
@@ -330,13 +351,16 @@ bool compileInfix(String input, bool reset_t) {
                 OpCode cur = OP_NONE; getOpCode(opStr, cur); if (cur == OP_SUB && !expect_op) cur = OP_NEG;
                 if (cur != OP_NONE) { 
                     bool is_unary = (cur == OP_NOT || cur == OP_NEG || cur == OP_BNOT);
-                    if (!expect_op && !is_unary) return false; expect_op = false;
+                    if (!expect_op && !is_unary) P_ERR("ERR: "+opStr, "Compile Error: Unexpected operator '" + opStr + "'"); 
+                    expect_op = false;
                     int prec = getPrecedence(cur); if (cur == OP_POW) prec++; 
                     flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, prec, true); 
                     if (cur == OP_SC_AND || cur == OP_SC_OR) { program_bank[target][len++] = {cur, 0}; os[++ot] = cur; os_id[ot] = len - 1; } 
                     else { os[++ot] = cur; os_id[ot] = 0; }
                     p += opStr.length(); 
-                } else return false; 
+                } else {
+                    P_ERR("ERR: "+*p, String("Compile Error: Unrecognized character or token '") + *p + "'"); 
+                }
             }
         }
     }
@@ -354,12 +378,14 @@ bool compileInfix(String input, bool reset_t) {
             program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
             for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
             ol_ptr--;
-        } else return false; 
+        } else P_ERR("ERR: =>{", "Compile Error: Unclosed brace in lambda definition"); 
     }
 
-    if (paren_depth != 0 || cond_depth != 0) return false; 
+    if (paren_depth != 0 || cond_depth != 0) P_ERR("ERR: )?", "Compile Error: Unmatched parentheses or ternary operators"); 
     flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr);
+    
     if (!validateProgram(target, len)) return false;
+    
     if (reset_t) t_raw = 0; prog_len_bank[target] = len; active_bank = target; 
     return true;
 }
@@ -371,6 +397,7 @@ bool compileInfix(String input, bool reset_t) {
  */
 bool compileRPN(String input) {
     initCompilerState();
+    last_vm_error = "";
     
     uint8_t target = 1 - active_bank; 
     memset(program_bank[target], 0, sizeof(Instruction) * 512);
@@ -387,7 +414,7 @@ bool compileRPN(String input) {
     bool parsing_params = false;
 
     for (int i = 0; i < tok_cnt; i++) {
-        if (len >= 512) return false;
+        if (len >= 512) P_ERR("ERR: PROG>512", "RPN Error: Program exceeds 512 instructions");
         String s = tokens[i];
         bool negate = false;
         if (s.startsWith("-") && s.length() > 1 && !isdigit(s[1]) && s[1] != '.' && s != "-=") { negate = true; s = s.substring(1); }
@@ -420,7 +447,7 @@ bool compileRPN(String input) {
         else if (s == ")") {
             if (parsing_params) parsing_params = false;
             else {
-                if (bs_ptr < 0) return false;
+                if (bs_ptr < 0) P_ERR("ERR: (", "RPN Error: Unmatched closing parenthesis ')'");
                 int start = block_starts[bs_ptr--]; bp_ptr--; 
                 program_bank[target][len++] = {OP_RET, 0}; 
                 program_bank[target][start].val = (int32_t)(len - start); 
@@ -438,7 +465,7 @@ bool compileRPN(String input) {
             cp_cnt = 0;
         }
         else if (s == "}") {
-            if (bs_ptr < 0) return false;
+            if (bs_ptr < 0) P_ERR("ERR: {", "RPN Error: Unmatched closing brace '}'");
             int start = block_starts[bs_ptr--]; 
             int p_cnt = bp_counts[bp_ptr];
             for (int k = 0; k < p_cnt; k++) program_bank[target][len++] = {OP_UNBIND, (int32_t)block_params[bp_ptr][k]};
@@ -482,7 +509,7 @@ bool compileRPN(String input) {
                     int src_id = program_bank[target][len-2].val;
                     if (src_id < 64 && var_id < 64 && rpn_func_arity[src_id] != -1) rpn_func_arity[var_id] = rpn_func_arity[src_id];
                 }
-            } else return false;
+            } else P_ERR("ERR: =", "RPN Error: Invalid assignment target");
         }
         else if (s.startsWith("'") && s.endsWith("'")) {
             int count = 0;
@@ -542,6 +569,7 @@ bool compileRPN(String input) {
         }
         if (negate) program_bank[target][len++] = {OP_NEG, 0};
     }
+    
     if (!validateProgram(target, len)) return false; 
     prog_len_bank[target] = len; active_bank = target; 
     return true;

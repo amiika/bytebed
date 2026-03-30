@@ -41,6 +41,7 @@ However ... If you want to program bytebeat and floatbeat on the fly on your tin
 + Global variables
 + Custom function support
 + Variable chaining and array support
++ Error messages from validator
 
 # Variables & functions
 
@@ -67,6 +68,8 @@ However ... If you want to program bytebeat and floatbeat on the fly on your tin
 
 # TODO / IDEAS
 
+- Add comments, // and /* */
+- Better tests and more systematic approach for supporting floatbeat?
 - Publish in M5Burner?
 - Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp
 - Some bytebeat / floatbeat tutorial

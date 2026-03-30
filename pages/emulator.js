@@ -492,6 +492,21 @@ function getDecompiledText(toRPN) {
     return str;
 }
 
+function getLastError() {
+    if (!wasm || !wasm.wasm_get_last_error) return "ERR: Compilation Failed";
+    const ptr = wasm.wasm_get_last_error();
+    if (ptr === 0) return "";
+    
+    const view = new Uint8Array(wasm.memory.buffer);
+    let str = ""; 
+    let i = ptr;
+    while (view[i] !== 0) { 
+        str += String.fromCharCode(view[i]); 
+        i++; 
+    }
+    return str;
+}
+
 function toggleMode(e) {
     if(e) e.stopPropagation();
     if (!wasm) return;
@@ -682,11 +697,27 @@ function compile(str) {
     const view = new Uint8Array(wasm.memory.buffer);
     view.set(encoded, inputPtr);
     view[inputPtr + encoded.length] = 0; 
-    const success = wasm.wasm_compile(is_rpn);
     
-    if (success && workletNode) {
-        workletNode.port.postMessage({ type: 'compile', encoded: encoded, is_rpn: is_rpn });
+    const success = wasm.wasm_compile(is_rpn);
+    const errorDisplay = document.getElementById('error-display');
+    
+    if (success) {
+        if (errorDisplay) {
+            errorDisplay.style.display = "none";
+            errorDisplay.innerText = "";
+        }
+        
+        if (workletNode) {
+            workletNode.port.postMessage({ type: 'compile', encoded: encoded, is_rpn: is_rpn });
+        }
+    } else {
+        if (errorDisplay) {
+            const errMsg = getLastError();
+            errorDisplay.innerText = errMsg;
+            errorDisplay.style.display = "block";
+        }
     }
+    
     return success;
 }
 

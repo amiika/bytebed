@@ -94,6 +94,8 @@ extern int32_t global_array_capacity;
 void clear_global_array();
 void ensure_global_array(int32_t req_size);
 
+extern String last_vm_error;
+
 struct MathFunc {
     const char* name;
     OpCode code;

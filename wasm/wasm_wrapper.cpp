@@ -3,7 +3,6 @@
 
 int32_t t_raw = 0; 
 
-// --- Instantiate the globals required by the VM for WebAssembly ---
 PlayMode current_play_mode = MODE_BYTEBEAT;
 int current_sample_rate = 8000;
 
@@ -17,6 +16,10 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE bool wasm_compile(bool is_rpn) {
         String expr(wasm_input_buffer);
         return is_rpn ? compileRPN(expr) : compileInfix(expr, true);
+    }
+
+    EMSCRIPTEN_KEEPALIVE const char* wasm_get_last_error() {
+        return last_vm_error.c_str();
     }
 
     EMSCRIPTEN_KEEPALIVE uint8_t wasm_execute(int32_t t) {
@@ -37,19 +40,16 @@ extern "C" {
         current_play_mode = (PlayMode)mode;
     }
 
-    // --- Fix for Floatbeat/Bytebeat Type-Tag Persistence ---
     EMSCRIPTEN_KEEPALIVE void wasm_reset_vm() {
         var_count = 0;
         memset(vars, 0, sizeof(vars));
         clear_global_array();
     }
 
-    // --- IMU Data Injector ---
     EMSCRIPTEN_KEEPALIVE void wasm_set_imu(float ax, float ay, float az, float gx, float gy, float gz) {
         updateIMUVars(ax, ay, az, gx, gy, gz);
     }
 
-    // --- Mouse Data Injector (Updated with mv) ---
     EMSCRIPTEN_KEEPALIVE void wasm_set_mouse(float mx, float my, float mv) {
         updateMouseVars(mx, my, mv);
     }
