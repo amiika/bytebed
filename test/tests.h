@@ -191,17 +191,25 @@ String runBytebeatTestSuite() {
         {"x = (lr) => sum(4, (i) => i * lr); [x(1), x(2)][0]", 0, 6, false, true}, 
 
         // --- 14. NEGATIVE ARRAYS & MATH STRESS TESTS ---
-        {"[-10, -20][-1]",             0, 236, false, true}, // Bytebeat maps -20 to 236
+        {"[-10, -20][-1]",             0, 236, false, true}, 
         {"[-10, -20][1]",              0, 236, false, true}, 
-        {"m = [-5, -15]; m[0] + m[1]", 0, 236, false, false}, // -20 -> 236
-        {"[[-1, -2], [-3, -4]][0][1]", 0, 254, false, true}, // -2 -> 254
-        {"[[-1, -2], [-3, -4]][1][0]", 0, 253, false, true}, // -3 -> 253
+        {"m = [-5, -15]; m[0] + m[1]", 0, 236, false, false}, 
+        {"[[-1, -2], [-3, -4]][0][1]", 0, 254, false, true}, 
+        {"[[-1, -2], [-3, -4]][1][0]", 0, 253, false, true}, 
         {"(-10) * (-2)",               0,  20, false, true},
         {"-10 / -2",                   0,   5, false, true},
         {"a = -5; b = -5; a + b",      0, 246, false, true}, 
         {"[-5, 5].reduce((a,v) => a + v)", 0, 0, false, true}, 
         {"[-5, -5].map(x => x * -2)[0]",   0, 10, false, true}, 
-        {"2 ** -1 * 10",               0,   5, false, true}  // Tests fast_pow negative exponent stability
+        {"2 ** -1 * 10",               0,   5, false, true},
+
+        // --- 15. COMMENTS & DOUBLE QUOTES ---
+        {"t + 5 // + 100\n+ 10",       10,  25, false, true},
+        {"t + /* inline */ 5",         10,  15, false, true},
+        {"\"1234\"[2]",                 0,   3, false, true},
+        {"\"5678\" 2 @",                0,   7, true,  true},
+        {"a = \"//\"; 50",              0,  50, false, true},
+        {"a = '/*'; 60",                0,  60, false, true}
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);

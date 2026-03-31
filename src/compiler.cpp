@@ -10,12 +10,78 @@ extern String last_vm_error;
 #endif
 
 /**
+ * Strips single-line and multi-line comments from the input string while preserving string literals.
+ * @param input The raw input formula containing potential comments
+ * @return A clean string with all comments removed
+ */
+static String stripComments(const String& input) {
+    String result = "";
+    #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
+        result.reserve(input.length());
+    #endif
+    bool in_single = false;
+    bool in_multi = false;
+    bool in_string = false;
+    char string_char = 0;
+    int len = input.length();
+
+    for (int i = 0; i < len; i++) {
+        char c = input[i];
+
+        if (in_single) {
+            if (c == '\n' || c == '\r') {
+                in_single = false;
+                result += c; 
+            }
+            continue;
+        }
+        
+        if (in_multi) {
+            if (c == '*' && i + 1 < len && input[i+1] == '/') {
+                in_multi = false;
+                i++; 
+            }
+            continue;
+        }
+
+        if (in_string) {
+            result += c;
+            if (c == string_char) in_string = false;
+            continue;
+        }
+
+        if (c == '\'' || c == '"') {
+            in_string = true;
+            string_char = c;
+            result += c;
+            continue;
+        }
+
+        if (c == '/' && i + 1 < len) {
+            if (input[i+1] == '/') {
+                in_single = true;
+                i++; 
+                continue;
+            } else if (input[i+1] == '*') {
+                in_multi = true;
+                i++; 
+                continue;
+            }
+        }
+
+        result += c;
+    }
+    return result;
+}
+
+/**
  * Compiles an infix formula into VM bytecode.
  * @param input The infix expression to compile
  * @param reset_t Determines if the playback time should be reset
  * @return true if compilation succeeds, false otherwise
  */
 bool compileInfix(String input, bool reset_t) {
+    input = stripComments(input);
     initCompilerState();
     last_vm_error = "";
     
@@ -129,10 +195,11 @@ bool compileInfix(String input, bool reset_t) {
             if (*p == '(') { os[++ot] = OP_DYN_CALL; os_id[ot] = id; expect_op = false; } 
             else { program_bank[target][len++] = {OP_LOAD, (int32_t)id}; expect_op = true; }
         }
-        else if (*p == '\'') {
-            if (expect_op) P_ERR("ERR: \'", "Compile Error: Expected operator before string literal");
+        else if (*p == '\'' || *p == '"') {
+            char quote_type = *p;
+            if (expect_op) P_ERR("ERR: STR", "Compile Error: Expected operator before string literal");
             p++; int count = 0;
-            while (*p && *p != '\'') { 
+            while (*p && *p != quote_type) { 
                 char c = *p; float val;
                 if (c >= '0' && c <= '9') val = c - '0';
                 else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
@@ -140,7 +207,7 @@ bool compileInfix(String input, bool reset_t) {
                 else val = c;
                 program_bank[target][len++] = {OP_VAL, setF(val)}; count++; p++; 
             }
-            if (*p == '\'') p++;
+            if (*p == quote_type) p++;
             program_bank[target][len++] = {OP_VAL, setF((float)count)}; program_bank[target][len++] = {OP_VEC, 1}; 
             expect_op = true;
         }
@@ -396,6 +463,7 @@ bool compileInfix(String input, bool reset_t) {
  * @return true if compilation succeeds, false otherwise
  */
 bool compileRPN(String input) {
+    input = stripComments(input);
     initCompilerState();
     last_vm_error = "";
     
@@ -511,7 +579,7 @@ bool compileRPN(String input) {
                 }
             } else P_ERR("ERR: =", "RPN Error: Invalid assignment target");
         }
-        else if (s.startsWith("'") && s.endsWith("'")) {
+        else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\""))) {
             int count = 0;
             for (size_t k = 1; k < s.length() - 1; k++) {
                 char c = s[k]; float val;
@@ -677,13 +745,13 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
     String w;
 
     #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
-        w.reserve(32);     // Cardputer optimization
+        w.reserve(32);
     #endif
 
     while (*p && tok_cnt < max_tokens) {
         if (isspace(*p)) p++;
         else if (*p == '&' && isalpha(*(p+1))) {
-            w = "&"; // Resets length, reuses reserved buffer
+            w = "&";
             p++;
             while (isalpha(*p) || isdigit(*p) || *p == '_') w += *p++;
             tokens[tok_cnt++] = w;
@@ -703,11 +771,12 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
             }
             tokens[tok_cnt++] = w;
         }
-        else if (*p == '\'') {
-            w = "'"; 
+        else if (*p == '\'' || *p == '"') {
+            char quote_type = *p;
+            w = String(quote_type); 
             p++;
-            while (*p && *p != '\'') w += *p++;
-            if (*p == '\'') { w += "'"; p++; }
+            while (*p && *p != quote_type) w += *p++;
+            if (*p == quote_type) { w += String(quote_type); p++; }
             tokens[tok_cnt++] = w;
         }
         else if (strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p)) { 
@@ -724,8 +793,8 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
             if (*p != ',') tokens[tok_cnt++] = String(*p); 
             p++;
         } else {
-            w = ""; // Clear buffer for general words/numbers
-            while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p) && *p != '\'') { 
+            w = "";
+            while (*p && !isspace(*p) && !strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p) && *p != '\'' && *p != '"') { 
                 w += *p++;
                 if ((w.endsWith("e") || w.endsWith("E")) && (*p == '+' || *p == '-')) { w += *p++; }
             }

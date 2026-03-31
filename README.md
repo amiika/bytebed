@@ -2,7 +2,7 @@
 
 Bytebeat virtual machine for M5Stack Cardputers.
 
-Running bytebeat on ESP32 boards can be simple as:
+Running bytebeat on ESP32 boards using [i2s api](https://docs.espressif.com/projects/arduino-esp32/en/latest/api/i2s.html) can be simple as:
 
 ```
 #include <ESP_I2S.h>
@@ -16,32 +16,30 @@ void setup() {
 }
 
 void loop() {
-
-  uint8_t b = (t>>7|t|t>>6)*10+4*(t&t>>13|t>>6);
-
+  uint8_t b = t*(((t>>12)|(t>>8))&(63&(t>>4)));
   int16_t s = (b - 128) * 50; 
   uint32_t frame = (s & 0xFFFF) | (s << 16);
   i2s.write((uint8_t*)&frame, 4); 
-  
   t++;
 }
 ```
 
-Just upload this and boom! You have some bytebeats going on. If you are happy with this do not bother reading further. Just be happy.
+Upload this to your ESP board and boom! You have some classic bytebeat going on. If you are happy with this do not bother reading further. Just be happy and move on.
 
-However ... If you want to program bytebeat and floatbeat on the fly on your tiny winey cardputer ... Keep on reading, I suppose.
+However ... If you want to program bytebeat and floatbeat on the fly on your tiny winey cardputer ... Keep on reading then, I suppose.
 
 # Bytebed features
 
-+ On the fly playing and visualization
-+ Classic C-style bytebeats
-+ Opionated floatbeat support
-+ Infix and postfix syntax compiler decompiler
-+ Syntax validator
-+ Global variables
-+ Custom function support
-+ Variable chaining and array support
-+ Error messages from validator
+Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feature is still on the fly support for interpreting and playing classic bytebeats. It also has more extensive and experimental features like:
+
++ Dual syntax: Switching between infix and postfix on the fly
++ Opionated floatbeat support: No while or for, just map and reduce
++ JS-like arrow functions
++ Strings interpreted as Base 62 number arrays
++ Magic global variables and arrays for delays, feedback and such
++ Comments // and /* */
++ Syntax validator and error messages
++ Undocumented features (See tests)
 
 # Variables & functions
 
@@ -68,13 +66,14 @@ However ... If you want to program bytebeat and floatbeat on the fly on your tin
 
 # TODO / IDEAS
 
-- Add comments, // and /* */
 - Better tests and more systematic approach for supporting floatbeat?
 - Publish in M5Burner?
 - Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp
-- Some bytebeat / floatbeat tutorial
+- Some bytebeat / floatbeat tutorial maybe?
 
 # Development
+
+Use platform.io and see platform.ini for configuration.
 
 ## WASM
 
