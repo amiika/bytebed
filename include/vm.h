@@ -108,13 +108,13 @@ struct OpInfo {
     int precedence;
 };
 
-extern const MathFunc mathLibrary[19];
+extern const MathFunc mathLibrary[23];
 extern const int mathLibrarySize;
 
 extern const MathFunc shorthands[5];
 extern const int shorthandsSize;
 
-extern const OpInfo opList[37]; 
+extern const OpInfo opList[42];
 extern const int opListSize;
 
 bool getOpCode(const String& sym, OpCode& outCode);

@@ -238,26 +238,25 @@ void uiTask(void *pvParameters) {
                     }
                     
                     syncPatchToBLE();
-                    goto end_keyboard_logic;
-                }
-
-                // Undo
-                if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
-                    int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
-                    if (undo_stack[prev] != "") { 
-                        undo_ptr = prev; 
-                        input_buffer = undo_stack[undo_ptr]; 
-                        cursor_pos = input_buffer.length(); 
-                        sendBLECombo('z');
-                    } 
-                }
-                // Redo
-                if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
-                    if (undo_ptr != undo_max) { 
-                        undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
-                        input_buffer = undo_stack[undo_ptr]; 
-                        cursor_pos = input_buffer.length(); 
-                    } 
+                } else {
+                    // Undo
+                    if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
+                        int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
+                        if (undo_stack[prev] != "") { 
+                            undo_ptr = prev; 
+                            input_buffer = undo_stack[undo_ptr]; 
+                            cursor_pos = input_buffer.length(); 
+                            sendBLECombo('z');
+                        } 
+                    }
+                    // Redo
+                    if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
+                        if (undo_ptr != undo_max) { 
+                            undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
+                            input_buffer = undo_stack[undo_ptr]; 
+                            cursor_pos = input_buffer.length(); 
+                        } 
+                    }
                 }
             } 
             
@@ -453,43 +452,54 @@ void uiTask(void *pvParameters) {
                     status_msg = "STOPPED";
                     status_timer = millis() + 1500;
                     if (is_sync_master) broadcastStop(); 
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
-                    rpn_mode = !rpn_mode; 
-                    input_buffer = decompile(rpn_mode); 
-                    cursor_pos = input_buffer.length();
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
-                    saveUndo(); 
-                    bg_sprite.fillScreen(theme.bg); 
-                    bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false); 
-                    applyCompilationResult(valid);
-                    
-                    if (ble_active) {
-                        bleKeyboard.write(176); 
+                } else {
+                    bool typed_valid_char = false;
+
+                    // 1. Process printable characters FIRST to catch '(', '*', '+' before the macros swallow them
+                    if (st.word.size() > 0) {
+                        for (auto i : st.word) { 
+                            // Ignore non-typable control characters AND the backtick
+                            if (i == '\b' || i == '\r' || i == '\n' || i == '\t' || i == '`') continue; 
+                            
+                            input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); 
+                            cursor_pos++; 
+                            typed_valid_char = true; 
+                            
+                            if (ble_active && bleKeyboard.isConnected()) {
+                                bleKeyboard.print(i);
+                            }
+                        }
                     }
-                } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
-                    if (cursor_pos > 0) { 
-                        input_buffer.remove(cursor_pos - 1, 1); 
-                        cursor_pos--; 
-                    }
-                    if (ble_active) {
-                        bleKeyboard.write(178); 
-                    }
-                } else if (st.word.size() > 0) {
-                    for (auto i : st.word) { 
-                        // Ignore non-typable control characters AND the backtick (since it's acting as STOP)
-                        if (i == '\b' || i == '\r' || i == '\n' || i == '\t' || i == '`') continue; 
-                        input_buffer = input_buffer.substring(0, cursor_pos) + i + input_buffer.substring(cursor_pos); 
-                        cursor_pos++; 
-                        
-                        if (ble_active && bleKeyboard.isConnected()) {
-                            bleKeyboard.print(i);
+
+                    // 2. Only process special keys if we didn't just type a valid character
+                    if (!typed_valid_char) {
+                        if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
+                            rpn_mode = !rpn_mode; 
+                            input_buffer = decompile(rpn_mode); 
+                            cursor_pos = input_buffer.length();
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER)) {
+                            saveUndo(); 
+                            bg_sprite.fillScreen(theme.bg); 
+                            bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false); 
+                            applyCompilationResult(valid);
+                            
+                            if (ble_active) {
+                                bleKeyboard.write(176); 
+                            }
+                        } else if (M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE)) {
+                            if (cursor_pos > 0) { 
+                                input_buffer.remove(cursor_pos - 1, 1); 
+                                cursor_pos--; 
+                            }
+                            if (ble_active) {
+                                bleKeyboard.write(178); 
+                            }
                         }
                     }
                 }
             }
         }
         
-        end_keyboard_logic:
         if (millis() - last_draw > UI_REFRESH_MS) { 
             draw(); 
             last_draw = millis(); 

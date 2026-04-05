@@ -33,21 +33,40 @@ public:
 
     const char* c_str() const { return str.c_str(); }
     int length() const { return str.length(); }
+    
+    void reserve(size_t size) { str.reserve(size); }
+
     void trim() {
         str.erase(0, str.find_first_not_of(" \t\r\n"));
         str.erase(str.find_last_not_of(" \t\r\n") + 1);
     }
+    
     bool startsWith(const char* prefix) const { return str.find(prefix) == 0; }
+    
     bool endsWith(const char* suffix) const {
         if (str.length() >= strlen(suffix)) return str.compare(str.length() - strlen(suffix), strlen(suffix), suffix) == 0;
         return false;
     }
+    
     String substring(int from, int to = -1) const {
         if (to == -1) return String(str.substr(from));
         return String(str.substr(from, to - from));
     }
+    
     int toInt() const { return std::atoi(str.c_str()); }
+    
     void remove(int index, int count) { str.erase(index, count); }
+
+    bool equals(const String& other) const { return str == other.str; }
+    bool equals(const char* other) const { return str == other; }
+    
+    bool equalsIgnoreCase(const String& other) const {
+        if (length() != other.length()) return false;
+        for (size_t i = 0; i < str.length(); ++i) {
+            if (std::tolower(str[i]) != std::tolower(other.str[i])) return false;
+        }
+        return true;
+    }
 
     bool operator==(const char* other) const { return str == other; }
     bool operator==(const String& other) const { return str == other.str; }
@@ -71,5 +90,5 @@ public:
 
 inline String operator+(const char* lhs, const String& rhs) { return String(lhs) + rhs; }
 
-// Stub out hardware-specific macros
 #define IRAM_ATTR
+#define DRAM_ATTR

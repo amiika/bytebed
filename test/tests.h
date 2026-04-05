@@ -209,7 +209,38 @@ String runBytebeatTestSuite() {
         {"\"1234\"[2]",                 0,   3, false, true},
         {"\"5678\" 2 @",                0,   7, true,  true},
         {"a = \"//\"; 50",              0,  50, false, true},
-        {"a = '/*'; 60",                0,  60, false, true}
+        {"a = '/*'; 60",                0,  60, false, true},
+
+        // --- 16. STACK MANIPULATION (FORTH-like RPN operators) ---
+        // Core words
+        {"5 dup +",                    0,  10, true,  false}, // 5 5 + -> 10
+        {"10 2 swap -",                0, 248, true,  false}, // 2 10 - -> -8 (248 unsigned)
+        {"1 2 3 rot",                  0,   1, true,  false}, // 1 2 3 rot -> 2 3 1 (TOS is 1)
+        {"10 2 5 rot * +",             0,  52, true,  false}, // 10 2 5 rot -> 2 5 10 * -> 2 50 + -> 52
+        {"10 2 over + *",              0, 120, true,  false}, // 10 2 over -> 10 2 10 + -> 10 12 * -> 120
+        {"10 20 over swap ;",          0,  10, true,  false}, // 10 20 over -> 10 20 10 swap -> 10 10 20 ; -> 10 10 (TOS is 10)
+       
+        // Symbol shorthands for stack ops
+        {"5 ++ +",                     0,  10, true,  false}, // 5 5 + -> 10
+        {"10 2 <> -",                  0, 248, true,  false}, // 2 10 - -> -8 (248 unsigned)
+        {"1 2 3 @@",                   0,   1, true,  false}, // 1 2 3 rot -> 2 3 1 (TOS is 1)
+        {"10 2 5 @@ * +",              0,  52, true,  false}, // 10 2 5 rot -> 2 5 10 * -> 2 50 + -> 52
+        {"10 2 ^^ + *",                0, 120, true,  false}, // 10 2 over -> 10 2 10 + -> 10 12 * -> 120
+        {"10 20 ^^ <> --",             0,  10, true,  false}, // 10 20 over -> 10 20 10 swap -> 10 10 20 ; -> 10 10 (TOS is 10)
+
+        // Advanced stack combinations (replicating multi-word Forth ops)
+        {"10 20 over over + + +",      0,  60, true,  false}, // 2dup equivalent: 10 20 10 20 -> 60
+        {"10 20 ^^ ^^ + + +",          0,  60, true,  false}, // 2dup via shorthands
+        {"5 10 swap",             0,   5, true,  false}, // nip equivalent
+        {"5 10 <>",                 0,   5, true,  false}, // nip via shorthands
+        {"10 20 swap over - -",        0,  30, true,  false}, // tuck equivalent: 10 20 -> 20 10 20 -> 20 (10-20) -> 20 - (-10) = 30
+        {"10 20 <> ^^ - -",            0,  30, true,  false}, // tuck via shorthands
+        {"5 10 15 <> @@ ^^ + + +",     0,  40, true,  false}, // 5 10 15 -> 5 15 10 -> 15 10 5 -> 15 10 5 10 -> 40
+        {"100 ++ ++ ++ + + +",         0, 144, true,  false}, // quadruple dup: 100*4 = 400. 400 % 256 = 144.
+        
+        // Custom macros and functions leveraging stack manipulation
+        {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},  // Custom Forth word using macro
+        {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false}  // Custom Forth word using variables
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);

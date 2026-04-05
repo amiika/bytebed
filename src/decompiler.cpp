@@ -2,6 +2,28 @@
 #include <string.h>
 #include <memory>
 
+String decompileRPN();
+String decompileInfixRange(Instruction* prog, int start_pc, int end_pc);
+String decompileInfix();
+
+/**
+ * Decompiles the current program bank into either RPN or infix syntax.
+ * @param to_rpn If true, decompiles to RPN; otherwise, to infix
+ * @return The decompiled formula string
+ */
+String decompile(bool to_rpn) {
+    if (prog_len_bank[active_bank] == 0) return "";
+    return to_rpn ? decompileRPN() : decompileInfix();
+}
+
+/**
+ * Decompiles the current program bank into an infix formula string.
+ * @return The decompiled infix string
+ */
+String decompileInfix() {
+    return decompileInfixRange(program_bank[active_bank], 0, prog_len_bank[active_bank]);
+}
+
 /**
  * Decompiles the current program bank into an RPN formula string.
  * @return The decompiled RPN string
@@ -16,6 +38,21 @@ String decompileRPN() {
     int len = prog_len_bank[active_bank];
     if (len == 0) return "";
     Instruction* prog = program_bank[active_bank];
+    
+    // Pre-pass: Identify which variables are stored as functions
+    bool is_func_map[64] = {false};
+    bool last_was_ret = false;
+    for (int k = 0; k < len; k++) {
+        if (prog[k].op == OP_RET) {
+            last_was_ret = true;
+        } else if (prog[k].op == OP_STORE || prog[k].op == OP_STORE_KEEP || prog[k].op == OP_ASSIGN_VAR) {
+            if (prog[k].val >= 0 && prog[k].val < 64) {
+                is_func_map[prog[k].val] = last_was_ret;
+            }
+        } else {
+            last_was_ret = false;
+        }
+    }
     
     std::unique_ptr<int[]> func_ends(new int[256]);
     int fe_ptr = -1;
@@ -41,7 +78,11 @@ String decompileRPN() {
             case OP_VAL: {
                 float v = getF(inst.val);
                 if (pc + 1 < len && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
-                out += String(v) + " "; 
+                if (v == (int32_t)v) {
+                    out += String((int32_t)v) + " "; 
+                } else {
+                    out += String(v) + " "; 
+                }
                 break;
             }
             case OP_T: {
@@ -51,14 +92,7 @@ String decompileRPN() {
             }
             case OP_LOAD: {
                 int id = inst.val;
-                bool is_func = false;
-                
-                for (int k = 0; k < len; k++) {
-                    if ((prog[k].op == OP_STORE || prog[k].op == OP_STORE_KEEP || prog[k].op == OP_ASSIGN_VAR) && prog[k].val == id) {
-                        if (k >= 1 && prog[k-1].op == OP_RET) is_func = true;
-                        else is_func = false; 
-                    }
-                }
+                bool is_func = (id >= 0 && id < 64) ? is_func_map[id] : false;
                 
                 bool is_call = (pc + 1 < len && (prog[pc+1].op == OP_DYN_CALL || prog[pc+1].op == OP_DYN_CALL_IF_FUNC));
                 int neg_offset = is_call ? 2 : 1;
@@ -125,7 +159,7 @@ String decompileRPN() {
                     }
                     out += ") { "; 
                 } else {
-                    out += "() { ";
+                    out += "{ "; // Clean zero-arity formatting!
                 }
                 pc = bind_pc - 1; 
                 break;
@@ -211,24 +245,36 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     out.reserve(256);
 #endif
     
-    std::unique_ptr<String[]> stack(new String[256]);
-    std::unique_ptr<int[]> prec_stack(new int[256]);
+    constexpr int PREC_MAX = 10;
+    constexpr int PREC_ASSIGN = -1;
+    constexpr int MAX_STACK = 128;
+    
+    std::unique_ptr<String[]> stack(new String[MAX_STACK]);
+    std::unique_ptr<int[]> prec_stack(new int[MAX_STACK]);
     int sp = -1;
     
     for (int pc = start_pc; pc < end_pc; pc++) {
         Instruction inst = prog[pc];
         
         if (inst.op == OP_VAL) {
-            if (sp < 255) { stack[++sp] = String(getF(inst.val)); prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { 
+                float v = getF(inst.val);
+                if (v == (int32_t)v) {
+                    stack[++sp] = String((int32_t)v);
+                } else {
+                    stack[++sp] = String(v);
+                }
+                prec_stack[sp] = PREC_MAX; 
+            }
         }
         else if (inst.op == OP_T) {
-            if (sp < 255) { stack[++sp] = "t"; prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = "t"; prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op == OP_LOAD) {
-            if (sp < 255) { stack[++sp] = getVarName(inst.val); prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = getVarName(inst.val); prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op == OP_RAND) {
-            if (sp < 255) { stack[++sp] = getOpSym(inst.op) + "()"; prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = getOpSym(inst.op) + "()"; prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op == OP_STORE && sp >= 0) {
             String val = stack[sp]; sp--;
@@ -251,14 +297,42 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             else if (inst.op == OP_SHL_ASSIGN) op_str = "<<=";
             else if (inst.op == OP_SHR_ASSIGN) op_str = ">>=";
 
-            if (sp < 255) { stack[++sp] = getVarName(inst.val) + op_str + val; prec_stack[sp] = -1; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = getVarName(inst.val) + op_str + val; prec_stack[sp] = PREC_ASSIGN; }
         }
         else if (inst.op == OP_STORE_AT && sp >= 2) {
             String val = stack[sp--]; 
             String idx = stack[sp--];  
             String base = stack[sp--];  
-            if (sp < 255) { stack[++sp] = base + "[" + idx + "]=" + val; prec_stack[sp] = -1; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = base + "[" + idx + "]=" + val; prec_stack[sp] = PREC_ASSIGN; }
         }
+        
+        // --- STACK COMBINATOR RECONSTRUCTION ---
+        else if (inst.op == OP_DUP && sp >= 0) {
+            String val = stack[sp];
+            int p = prec_stack[sp];
+            if (sp < MAX_STACK - 1) { stack[++sp] = val; prec_stack[sp] = p; }
+        }
+        else if (inst.op == OP_SWAP && sp >= 1) {
+            String top = stack[sp]; int p_top = prec_stack[sp];
+            String mid = stack[sp-1]; int p_mid = prec_stack[sp-1];
+            stack[sp] = mid; prec_stack[sp] = p_mid;
+            stack[sp-1] = top; prec_stack[sp-1] = p_top;
+        }
+        else if (inst.op == OP_ROT && sp >= 2) {
+            String top = stack[sp]; int p_top = prec_stack[sp];
+            String mid = stack[sp-1]; int p_mid = prec_stack[sp-1];
+            String bot = stack[sp-2]; int p_bot = prec_stack[sp-2];
+            stack[sp-2] = mid; prec_stack[sp-2] = p_mid;
+            stack[sp-1] = top; prec_stack[sp-1] = p_top;
+            stack[sp] = bot; prec_stack[sp] = p_bot;
+        }
+        else if (inst.op == OP_OVER && sp >= 1) {
+            String val = stack[sp-1];
+            int p = prec_stack[sp-1];
+            if (sp < MAX_STACK - 1) { stack[++sp] = val; prec_stack[sp] = p; }
+        }
+        // ----------------------------------------
+        
         else if (inst.op == OP_POP && sp >= 0) {
             String val = stack[sp]; sp--;
             if (out != "") out += ";";
@@ -287,7 +361,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             
             func_str += decompileInfixRange(prog, inner_start, inner_end) + "}";
             
-            if (sp < 255) { stack[++sp] = func_str; prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = func_str; prec_stack[sp] = PREC_MAX; }
             
             pc = target_end - 1;
         }
@@ -303,11 +377,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             func_call += ")";
             
             sp -= (args + 1);
-            if (sp < 255) { stack[++sp] = func_call; prec_stack[sp] = 10; }
-        }
-        else if (inst.op == OP_DYN_CALL_IF_FUNC) {
-        }
-        else if (inst.op == OP_RET || inst.op == OP_BIND || inst.op == OP_UNBIND) {
+            if (sp < MAX_STACK - 1) { stack[++sp] = func_call; prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op == OP_VEC && sp >= 0) {
             int size = stack[sp].toInt(); sp--;
@@ -319,17 +389,17 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                 }
                 vec_str += "]";
                 sp -= size;
-                if (sp < 255) { stack[++sp] = vec_str; prec_stack[sp] = 10; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = vec_str; prec_stack[sp] = PREC_MAX; }
             }
         }
         else if (inst.op == OP_ALLOC && sp >= 0) {
             String size = stack[sp]; sp--;
-            if (sp < 255) { stack[++sp] = "$[" + size + "]"; prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = "$[" + size + "]"; prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op == OP_AT && sp >= 1) {
             String idx = stack[sp--];  
             String base = stack[sp--]; 
-            if (sp < 255) { stack[++sp] = base + "[" + idx + "]"; prec_stack[sp] = 10; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = base + "[" + idx + "]"; prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op == OP_LOOP_PREP && sp >= 1) {
             String f = stack[sp]; sp--;
@@ -345,12 +415,10 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (inst.val == 1) use_dot = false; 
             
             if (use_dot) {
-                if (sp < 255) { stack[++sp] = count + "." + fnName + "(" + f + ")"; prec_stack[sp] = 10; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = count + "." + fnName + "(" + f + ")"; prec_stack[sp] = PREC_MAX; }
             } else {
-                if (sp < 255) { stack[++sp] = fnName + "(" + count + "," + f + ")"; prec_stack[sp] = 10; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = fnName + "(" + count + "," + f + ")"; prec_stack[sp] = PREC_MAX; }
             }
-        }
-        else if (inst.op == OP_LOOP_EVAL || inst.op == OP_LOOP_DONE) {
         }
         else if (inst.op == OP_COND && sp >= 2) {
             String f = stack[sp--]; 
@@ -360,11 +428,11 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (tv.startsWith("()=>{") && tv.endsWith("}")) tv = tv.substring(5, tv.length() - 1);
             if (f.startsWith("()=>{") && f.endsWith("}")) f = f.substring(5, f.length() - 1);
             
-            if (sp < 255) { stack[++sp] = c + "?" + tv + ":" + f; prec_stack[sp] = 0; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = c + "?" + tv + ":" + f; prec_stack[sp] = 0; }
         }
         else if (inst.op == OP_SC_AND || inst.op == OP_SC_OR) {
             if (inst.val != 0) {
-                String left = "0"; int lp = 10;
+                String left = "0"; int lp = PREC_MAX;
                 if (sp >= 0) { left = stack[sp]; lp = prec_stack[sp]; sp--; }
                 
                 int target_end = pc + inst.val; 
@@ -379,7 +447,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                     right = "(" + right + ")"; 
                 }
                 
-                if (sp < 255) { stack[++sp] = left + sym + right; prec_stack[sp] = op_p; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = left + sym + right; prec_stack[sp] = op_p; }
                 
                 pc = target_end - 1;
             } else {
@@ -392,20 +460,20 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                     
                     if (lp < op_p) left = "(" + left + ")";
                     if (rp <= op_p) right = "(" + right + ")";
-                    if (sp < 255) { stack[++sp] = left + sym + right; prec_stack[sp] = op_p; }
+                    if (sp < MAX_STACK - 1) { stack[++sp] = left + sym + right; prec_stack[sp] = op_p; }
                 }
             }
         }
         else if ((inst.op >= OP_SIN && inst.op <= OP_ATAN || inst.op == OP_INT) && sp >= 0) { 
              String val = stack[sp--]; 
              String sym = getOpSym(inst.op);
-             if (sp < 255) { stack[++sp] = sym + "(" + val + ")"; prec_stack[sp] = 10; }
+             if (sp < MAX_STACK - 1) { stack[++sp] = sym + "(" + val + ")"; prec_stack[sp] = PREC_MAX; }
         }
         else if (inst.op >= OP_MIN && inst.op <= OP_POW && sp >= 1) { 
              String right = stack[sp--]; 
              String left = stack[sp--]; 
              String sym = getOpSym(inst.op);
-             if (sp < 255) { stack[++sp] = sym + "(" + left + "," + right + ")"; prec_stack[sp] = 10; }
+             if (sp < MAX_STACK - 1) { stack[++sp] = sym + "(" + left + "," + right + ")"; prec_stack[sp] = PREC_MAX; }
         }
         else if ((inst.op == OP_NEG || inst.op == OP_NOT || inst.op == OP_BNOT) && sp >= 0) {
             String val = stack[sp]; 
@@ -416,7 +484,13 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (inst.op == OP_NEG) sym = "-";
             
             if (p < 9 || val.startsWith("-")) val = "(" + val + ")";
-            if (sp < 255) { stack[++sp] = sym + val; prec_stack[sp] = 9; }
+            if (sp < MAX_STACK - 1) { stack[++sp] = sym + val; prec_stack[sp] = 9; }
+        }
+        else if (inst.op == OP_LOOP_EVAL || inst.op == OP_LOOP_DONE || 
+                 inst.op == OP_DYN_CALL_IF_FUNC || inst.op == OP_RET || 
+                 inst.op == OP_BIND || inst.op == OP_UNBIND) {
+            // These are structural or execution-deferring opcodes.
+            // They must be explicitly ignored so they do not fall into the binary operator block below.
         }
         else if (sp >= 1) {
             String right = stack[sp]; int rp = prec_stack[sp]; sp--;
@@ -427,16 +501,16 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             
             if (inst.op == OP_MUL && right == "-1") {
                 if (lp < 9 || left.startsWith("-")) left = "(" + left + ")";
-                if (sp < 255) { stack[++sp] = "-" + left; prec_stack[sp] = 9; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = "-" + left; prec_stack[sp] = 9; }
             }
             else if (inst.op == OP_MUL && left == "-1") {
                 if (rp < 9 || right.startsWith("-")) right = "(" + right + ")";
-                if (sp < 255) { stack[++sp] = "-" + right; prec_stack[sp] = 9; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = "-" + right; prec_stack[sp] = 9; }
             }
             else {
                 if (lp < op_p) left = "(" + left + ")";
                 if (rp <= op_p) right = "(" + right + ")";
-                if (sp < 255) { stack[++sp] = left + sym + right; prec_stack[sp] = op_p; }
+                if (sp < MAX_STACK - 1) { stack[++sp] = left + sym + right; prec_stack[sp] = op_p; }
             }
         }
     }
@@ -446,7 +520,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     int oa_cnt = 0;
     
     for (int i = 0; i <= sp; i++) {
-        if (prec_stack[i] == -1) {
+        if (prec_stack[i] == PREC_ASSIGN) {
             if (assignments != "") assignments += ";";
             assignments += stack[i];
         } else {
@@ -461,36 +535,48 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
     }
     
     if (oa_cnt >= 1) {
-        String call = orphaned_args[oa_cnt - 1];
-        if (oa_cnt > 1) {
-            call += "(";
+        String top_item = orphaned_args[oa_cnt - 1];
+        bool looks_like_func = false;
+        
+        if (top_item.length() > 0) {
+            char first = top_item[0];
+            // Only format as a function if it starts with a letter, & or _ and contains alphanumerics
+            if (isalpha(first) || first == '&' || first == '_') {
+                looks_like_func = true;
+                for (size_t i = 1; i < top_item.length(); i++) {
+                    char c = top_item[i];
+                    if (!isalnum(c) && c != '_') {
+                        looks_like_func = false;
+                        break;
+                    }
+                }
+            }
+        }
+        
+        // Prevent reserved global math constants from being formatted as functions
+        if (top_item == "t" || top_item == "PI" || top_item == "E" || top_item == "TAU" || top_item == "pi" || top_item == "tau") {
+            looks_like_func = false;
+        }
+        
+        if (oa_cnt > 1 && looks_like_func) {
+            String call = top_item + "(";
             for (int i = 0; i < oa_cnt - 1; i++) {
                 call += orphaned_args[i];
-                if (i < oa_cnt - 2) call += ",";
+                if (i < oa_cnt - 2) call += ", ";
             }
             call += ")";
+            if (final_out != "") final_out += "; ";
+            final_out += call;
+        } else {
+            String seq = "";
+            for (int i = 0; i < oa_cnt; i++) {
+                seq += orphaned_args[i];
+                if (i < oa_cnt - 1) seq += ", ";
+            }
+            if (final_out != "") final_out += "; ";
+            final_out += seq;
         }
-        if (final_out != "") final_out += ";";
-        final_out += call;
     }
     
     return final_out;
-}
-
-/**
- * Decompiles the current program bank into an infix formula string.
- * @return The decompiled infix string
- */
-String decompileInfix() {
-    return decompileInfixRange(program_bank[active_bank], 0, prog_len_bank[active_bank]);
-}
-
-/**
- * Decompiles the current program bank into either RPN or infix syntax.
- * @param to_rpn If true, decompiles to RPN; otherwise, to infix
- * @return The decompiled formula string
- */
-String decompile(bool to_rpn) {
-    if (prog_len_bank[active_bank] == 0) return "";
-    return to_rpn ? decompileRPN() : decompileInfix();
 }

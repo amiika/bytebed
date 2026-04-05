@@ -414,7 +414,7 @@ bool compileInfix(String input, bool reset_t) {
             } else {
                 String opStr = ""; opStr += *p;
                 if (*(p+1) && *(p+2) && strchr("=<>!&|*", *(p+1)) && *(p+2) == '=') { String test3 = opStr + *(p+1) + *(p+2); OpCode dummy; if (getOpCode(test3, dummy)) opStr = test3; }
-                if (opStr.length() == 1 && *(p+1) && strchr("=<>!&|*", *(p+1))) { String test2 = opStr + *(p+1); OpCode dummy; if (getOpCode(test2, dummy)) opStr = test2; }
+                if (opStr.length() == 1 && *(p+1) && strchr("=<>!&|*@^+-", *(p+1))) { String test2 = opStr + *(p+1); OpCode dummy; if (getOpCode(test2, dummy)) opStr = test2; }
                 OpCode cur = OP_NONE; getOpCode(opStr, cur); if (cur == OP_SUB && !expect_op) cur = OP_NEG;
                 if (cur != OP_NONE) { 
                     bool is_unary = (cur == OP_NOT || cur == OP_NEG || cur == OP_BNOT);
@@ -598,6 +598,10 @@ bool compileRPN(String input) {
             }
             else if (s == ";") program_bank[target][len++] = {OP_POP, 0}; 
             else if (s == "?") program_bank[target][len++] = {OP_COND, 0};
+            else if (s == "dup")  { program_bank[target][len++] = {OP_DUP, 0}; }
+            else if (s == "swap") { program_bank[target][len++] = {OP_SWAP, 0}; }
+            else if (s == "rot")  { program_bank[target][len++] = {OP_ROT, 0}; }
+            else if (s == "over") { program_bank[target][len++] = {OP_OVER, 0}; }
             else if (s.startsWith("call")) {
                 int args = 0;
                 if (s.length() > 4) args = s.substring(4).toInt();
@@ -760,10 +764,10 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
             w = "-"; 
             p++;
             if (strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p)) { 
-                if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
-                    String test = String(*p) + *(p+1);
+                if (*(p+1) && *(p+2) && strchr("=<>!&|*@^+-", *(p+1)) && *(p+2) == '=') {
+                    String test3 = String(*p) + *(p+1) + *(p+2);
                     OpCode dummy;
-                    if (getOpCode(test, dummy)) { w += test; p += 2; } 
+                    if (getOpCode(test3, dummy)) { w += test3; p += 2; } 
                     else { w += *p++; }
                 } else { w += *p++; }
             } else {
@@ -780,12 +784,12 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
             tokens[tok_cnt++] = w;
         }
         else if (strchr("(){}=,;<>!+-*/%&|^~@_#$:", *p)) { 
-            if (*(p+1) && *(p+2) && strchr("=<>!&|*", *(p+1)) && *(p+2) == '=') {
+            if (*(p+1) && *(p+2) && strchr("=<>!&|*@^+-", *(p+1)) && *(p+2) == '=') {
                 String test3 = String(*p) + *(p+1) + *(p+2);
                 OpCode dummy;
                 if (getOpCode(test3, dummy)) { tokens[tok_cnt++] = test3; p += 3; continue; }
             }
-            if (*(p+1) && strchr("=<>!&|*", *(p+1))) {
+            if (*(p+1) && strchr("=<>!&|*@^+-", *(p+1))) {
                 String test2 = String(*p) + *(p+1);
                 OpCode dummy;
                 if (getOpCode(test2, dummy)) { tokens[tok_cnt++] = test2; p += 2; continue; }
@@ -827,12 +831,14 @@ static int get_expr_start(uint8_t target, int end_pc) {
         if (func_depth == 0) {
             int produces = 1;
             if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) produces = 0;
+            else if (op == OP_DUP || op == OP_SWAP) produces = 2;
+            else if (op == OP_ROT || op == OP_OVER) produces = 3;
             
             int consumes = 0;
-            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_LOOP_PREP) consumes = 2;
-            else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON) consumes = 3;
+            if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_LOOP_PREP || op == OP_SWAP || op == OP_OVER) consumes = 2;
+            else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON || op == OP_ROT) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT) consumes = 1;
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP) consumes = 1;
             else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;

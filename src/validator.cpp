@@ -192,6 +192,35 @@ bool validateProgram(uint8_t bank, int len) {
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on RAND at PC " + String(pc));
                 sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; break;
 
+            case OP_DUP:
+                if (sp < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on DUP at PC " + String(pc));
+                if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on DUP at PC " + String(pc));
+                sp++; v_stack[sp] = v_stack[sp-1]; 
+                break;
+
+            case OP_SWAP:
+                if (sp < 1) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on SWAP at PC " + String(pc));
+                { Val tmp = v_stack[sp]; v_stack[sp] = v_stack[sp-1]; v_stack[sp-1] = tmp; }
+                break;
+
+            case OP_ROT:
+                if (sp < 2) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on ROT at PC " + String(pc));
+                { 
+                    Val a = v_stack[sp - 2]; 
+                    Val b = v_stack[sp - 1]; 
+                    Val c = v_stack[sp];
+                    v_stack[sp - 2] = b;
+                    v_stack[sp - 1] = c;
+                    v_stack[sp] = a;
+                }
+                break;
+
+            case OP_OVER:
+                if (sp < 1) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on OVER at PC " + String(pc));
+                if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on OVER at PC " + String(pc));
+                sp++; v_stack[sp] = v_stack[sp-2];
+                break;
+
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:
             case OP_AND: case OP_OR: case OP_XOR: case OP_SHL: case OP_SHR:
             case OP_LT: case OP_GT: case OP_EQ: case OP_NEQ: case OP_LTE: case OP_GTE:
