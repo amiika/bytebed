@@ -204,6 +204,7 @@ bool compileInfix(String input, bool reset_t) {
                 if (c >= '0' && c <= '9') val = c - '0';
                 else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
                 else if (c >= 'A' && c <= 'Z') val = c - 'A' + 10;
+                else if (c == '-' || c == ' ') val = 0.0f;
                 else val = c;
                 program_bank[target][len++] = {OP_VAL, setF(val)}; count++; p++; 
             }
@@ -586,6 +587,7 @@ bool compileRPN(String input) {
                 if (c >= '0' && c <= '9') val = c - '0';
                 else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
                 else if (c >= 'A' && c <= 'Z') val = c - 'A' + 10;
+                else if (c == '-' || c == ' ') val = 0.0f;
                 else val = c;
                 program_bank[target][len++] = {OP_VAL, setF(val)}; count++;
             }

@@ -39,7 +39,8 @@ Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feat
 + Magic global variables and arrays for delays, feedback and such
 + Comments // and /* */
 + Syntax validator and error messages
-+ Undocumented features (See tests)
++ Forth like stack operators in prefix mode (dup, swap, over, rot).
++ Other undocumented features (See tests)
 
 # Variables & functions
 
@@ -58,11 +59,26 @@ Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feat
 + fn + 0: History view
 + fn + t: Change theme color
 + fn + s: Change samplerate
-+ fn + f: Toggle bytebeat / floatbeat
-+ fn + w: Wifi sync (Captive portal & bytebeat.local)
-+ fn + l: Slave mode: Listen (ESP-NOW sync mode)
-+ fn + m: Master mode: Sync (ESP-NOW sync mode)
++ fn + f: Change between: bytebeat / floatbeat
+
+## Multiple cardputers
+
+Syncing the clock (ESP-NOW sync mode) with multiple cardputers works by setting one cardputer as the master and others as slaves. Pressing fn+m will also overwrite the current function to all the slaves that are listening.
+
++ fn + m: Master mode: Sync 
++ fn + l: Slave mode: Listen
+
+## Screen sharing
+
+Bytebed supports two "screensharing" options that can be used to share your tiny screen using wifi captive portal or by using cardputer as bluetooth keyboard and use WASM version. These are hacky implementations for sharing the screen when performing live with cardputer.  
+
++ fn + w: Wifi sync
+
+Use captive portal via WIFI to share the screen locally. Captive portal appears as "BYTEBED" in your wifi connections. You can also close captive portal and connect to bytebeat.local when connected to the wifi.
+
 + fn + b: Bluetooth keyboard
+
+Use bluetooth and wasm emulator (pages/player) if you want to share the screen over the internet. Appears as BYTEBED in your bluetooth devices. It's pretty pointless to use cardputer keyboard in this case, but hey ... it kind of works :D
 
 # TODO / IDEAS
 
