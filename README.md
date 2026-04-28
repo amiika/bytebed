@@ -32,14 +32,14 @@ However ... If you want to program bytebeat and floatbeat on the fly on your tin
 
 Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feature is still on the fly support for interpreting and playing classic bytebeats. It also has more extensive and experimental features like:
 
-+ Dual syntax: Switching between infix and postfix on the fly
++ Dual syntax: Switching between infix and postfix on the fly using tab key
 + Opionated floatbeat support: No while or for, just map and reduce
 + JS-like arrow functions
 + Strings interpreted as Base 62 number arrays
 + Magic global variables and arrays for delays, feedback and such
++ Forth like stack operators in prefix mode (dup, swap, over, rot)
 + Comments // and /* */
 + Syntax validator and error messages
-+ Forth like stack operators in prefix mode (dup, swap, over, rot).
 + Other undocumented features (See tests)
 
 # Variables & functions
@@ -80,10 +80,13 @@ Use captive portal via WIFI to share the screen locally. Captive portal appears 
 
 Use bluetooth and wasm emulator (pages/player) if you want to share the screen over the internet. Appears as BYTEBED in your bluetooth devices. It's pretty pointless to use cardputer keyboard in this case, but hey ... it kind of works :D
 
+# Installation
+
+Compile & Upload using Platform.io or by using [M5Burner](https://docs.m5stack.com/en/uiflow/m5burner/intro) (Search for Bytebed). Latest firmware also available in Firmware folder.
+
 # TODO / IDEAS
 
 - Better tests and more systematic approach for supporting floatbeat?
-- Publish in M5Burner?
 - Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp
 - Some bytebeat / floatbeat tutorial maybe?
 
@@ -115,7 +118,11 @@ pio test -e cardputer
 
 # Contributions
 
-Sure, why not.
+Brave testers needed. Free slots for your bytebeats are available!
+
+Just do a pull request directly to free slots in state.cpp or post Issue.
+
+Bug reports are also welcome.
 
 # Credits
 
