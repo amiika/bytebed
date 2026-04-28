@@ -137,7 +137,16 @@ bool compileInfix(String input, bool reset_t) {
         if (isdigit(*p) || (*p == '.' && isdigit(*(p+1)))) { 
             if (expect_op) P_ERR("ERR: .?", "Compile Error: Expected operator before number");
             expect_op = true;
-            program_bank[target][len++] = {OP_VAL, setF(strtof(p, (char**)&p))}; 
+            
+            char* next_p;
+            float val = strtof(p, &next_p);
+            
+            if (next_p > p && *(next_p - 1) == '.' && isalpha(*next_p)) {
+                next_p--; 
+            }
+            
+            p = next_p;
+            program_bank[target][len++] = {OP_VAL, setF(val)}; 
         }
         else if (isalpha(*p)) { 
             wordBuffer = ""; 
