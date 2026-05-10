@@ -73,13 +73,30 @@ void execute_vm_block(int32_t start_t, int length, uint8_t* out_buf);
 
 /**
  * Updates IMU variables in the VM state.
+ * @param ax Accelerometer X
+ * @param ay Accelerometer Y
+ * @param az Accelerometer Z
+ * @param gx Gyroscope X
+ * @param gy Gyroscope Y
+ * @param gz Gyroscope Z
  */
 void updateIMUVars(float ax, float ay, float az, float gx, float gy, float gz);
 
 /**
  * Updates mouse variables in the VM state.
+ * @param mx Mouse X position
+ * @param my Mouse Y position
+ * @param mv Mouse click state/velocity
  */
 void updateMouseVars(float mx, float my, float mv);
+
+/**
+ * Updates the virtual machine memory with active MIDI parameters.
+ * @param freq The frequency of the active MIDI note in Hertz
+ * @param gate The velocity/gate state (0.0 for off, >0.0 for active)
+ * @param note The raw MIDI note number (0-127)
+ */
+void updateMIDIVars(float freq, float gate, float note);
 
 extern Instruction program_bank[2][512];
 extern int prog_len_bank[2];
@@ -91,7 +108,15 @@ extern int var_count;
 extern float* global_array_mem;
 extern int32_t global_array_capacity;
 
+/**
+ * Clears the global array memory.
+ */
 void clear_global_array();
+
+/**
+ * Ensures the global array has the requested capacity.
+ * @param req_size The required capacity size
+ */
 void ensure_global_array(int32_t req_size);
 
 extern String last_vm_error;
@@ -117,9 +142,45 @@ extern const int shorthandsSize;
 extern const OpInfo opList[42];
 extern const int opListSize;
 
+/**
+ * Gets the OpCode for a given symbol.
+ * @param sym The symbol string
+ * @param outCode Reference to store the OpCode
+ * @return true if found, false otherwise
+ */
 bool getOpCode(const String& sym, OpCode& outCode);
+
+/**
+ * Gets or creates an ID for a variable name.
+ * @param name The name of the variable
+ * @return The ID of the variable
+ */
 int getVarId(const String& name);
+
+/**
+ * Gets the name of a variable by its ID.
+ * @param id The ID of the variable
+ * @return The name of the variable
+ */
 String getVarName(int id);
+
+/**
+ * Checks if a variable is defined.
+ * @param name The name to check
+ * @return true if defined, false otherwise
+ */
 bool isVarDefined(const String& name); 
+
+/**
+ * Gets the precedence of a given OpCode.
+ * @param op The OpCode
+ * @return The precedence level
+ */
 int getPrecedence(OpCode op);
+
+/**
+ * Gets the symbol string for a given OpCode.
+ * @param op The OpCode
+ * @return The symbol string
+ */
 String getOpSym(OpCode op);

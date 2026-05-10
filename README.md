@@ -48,6 +48,7 @@ Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feat
 + Accelerometer: ax, ay, az (Cardputer ADV only)
 + Gyroscope: gx, gy, gz (Cardputer ADV only)
 + Mouse (for wasm): mx, my, mv (velocity)
++ MIDI: mf (freq), mn (note), mg (gate)
 
 # Controls & Modes
 
@@ -65,8 +66,18 @@ Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feat
 
 Syncing the clock (ESP-NOW sync mode) with multiple cardputers works by setting one cardputer as the master and others as slaves. Pressing fn+m will also overwrite the current function to all the slaves that are listening.
 
-+ fn + m: Master mode: Sync 
-+ fn + l: Slave mode: Listen
++ fn + p: Master mode: Push clock to all listeners 
++ fn + l: Slave mode: Listen clock
+
+## USB Midi input
+
++ fn + m: Start USB MIDI server to listen incoming events
+
+Use **mn** as midi note or **mf** as incoming frequency in hz. Use **mg** as a gate.
+
+See banks 6-8 for examples using midi in.
+
+Pitch bend is also supported using **mf** and fixed to range between -2 to 2 semitones to support pitch bend tuning.
 
 ## Screen sharing
 
@@ -75,10 +86,6 @@ Bytebed supports two "screensharing" options that can be used to share your tiny
 + fn + w: Wifi sync
 
 Use captive portal via WIFI to share the screen locally. Captive portal appears as "BYTEBED" in your wifi connections. You can also close captive portal and connect to bytebeat.local when connected to the wifi.
-
-+ fn + b: Bluetooth keyboard
-
-Use bluetooth and wasm emulator (pages/player) if you want to share the screen over the internet. Appears as BYTEBED in your bluetooth devices. It's pretty pointless to use cardputer keyboard in this case, but hey ... it kind of works :D
 
 # Installation
 
@@ -98,7 +105,7 @@ Use platform.io and see platform.ini for configuration.
 
 To compile to wasm and wasm binary header file, run this in wasm folder:
 
-emcc ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cpp wasm_wrapper.cpp -I. -I../include -I../src -s EXPORTED_FUNCTIONS="['_main', '_get_input_buffer', '_wasm_compile', '_wasm_execute', '_wasm_decompile', '_wasm_set_sample_rate', '_wasm_set_play_mode']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o bytebed.wasm
+emcc ../src/state.cpp ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cpp wasm_wrapper.cpp -I. -I../include -I../src -s EXPORTED_FUNCTIONS="['_main', '_get_input_buffer', '_wasm_compile', '_wasm_execute', '_wasm_decompile', '_wasm_set_sample_rate', '_wasm_set_play_mode', '_wasm_set_midi', '_wasm_set_imu', '_wasm_set_mouse', '_wasm_reset_vm', '_wasm_get_last_error', '_wasm_get_preset_formula', '_wasm_get_preset_rate', '_wasm_get_preset_mode']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o bytebed.wasm
 
 xxd -i bytebed.wasm | sed 's/unsigned char/const unsigned char/g' > ../include/wasm_binary.h
 
@@ -111,6 +118,7 @@ pio test -e native
 For more verbose testing:
 
 pio test -e native -v 
+
 
 For testing the hardware:
 

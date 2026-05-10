@@ -2,7 +2,6 @@
 #include <ESPmDNS.h>
 #include <esp_task_wdt.h> 
 #include <nvs_flash.h> 
-#include "ble_keyboard.h"
 #include "state.h"
 #include "vm.h"
 #include "fast_math.h"
@@ -10,10 +9,11 @@
 #include "captive.h"
 #include "fasti2s.h" 
 #include "sync.h"
+#include "usb_midi_handler.h"
 
 // --- Global System Configuration ---
 const bool WIPE_NVRAM = false; 
-const bool FORCE_REWRITE_PRESETS = false;
+const bool FORCE_REWRITE_PRESETS = true;
 
 // --- Global Sync State ---
 bool is_sync_master = false;
@@ -31,69 +31,93 @@ uint32_t ui_ring_tail = 0;
 
 FastI2S audioOut;
 
-/* Keyboard helpers */
+// --- Native USB MIDI State ---
+USBMidiHandler midiHandler;
+bool usb_midi_enabled = false;
+float current_midi_freq = 440.0f;
+int current_midi_note = 0; 
+TaskHandle_t midiTaskHandle = NULL; 
 
 /**
- * Inserts a character into the editor buffer and syncs over BLE.
- * @param c The character to insert
+ * @brief Helper to keep the VM 'sr' and 'mn' variables in sync with hardware.
  */
-void doEditorInsert(char c) {
-    input_buffer = input_buffer.substring(0, cursor_pos) + c + input_buffer.substring(cursor_pos);
-    cursor_pos++;
-    if (ble_active && bleKeyboard.isConnected()) bleKeyboard.print(c);
+void updateRuntimeVars() {
+    int i_sr = getVarId("sr");
+    vars[i_sr].type = 0;
+    vars[i_sr].f = (float)current_sample_rate;
+
+    int i_mn = getVarId("mn");
+    vars[i_mn].type = 0; // Standard integer/float type, no arrays!
+    vars[i_mn].f = (float)current_midi_note;
+}
+
+void onNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
+    if (!usb_midi_enabled) return;
+    current_midi_freq = 440.0f * pow(2.0f, (note - 69) / 12.0f);
+    float gate = velocity / 127.0f;
+    
+    // Pass the freq, gate, and raw note number to the VM
+    updateMIDIVars(current_midi_freq, gate, (float)note);
+}
+
+void onNoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
+    if (!usb_midi_enabled) return;
+    float released_freq = 440.0f * pow(2.0f, (note - 69) / 12.0f);
+    
+    // If the released note is the currently playing note, turn the gate off
+    if (abs(current_midi_freq - released_freq) < 0.1f) {
+        updateMIDIVars(current_midi_freq, 0.0f, (float)note);
+    }
 }
 
 /**
- * Deletes the character behind the cursor and syncs over BLE.
+ * @brief FreeRTOS task for polling the Native USB hardware buffer.
  */
+void midiTask(void *pvParameters) {
+    while(1) {
+        if (usb_midi_enabled) {
+            midiHandler.poll();
+        }
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+/* Keyboard helpers */
+
+void doEditorInsert(char c) {
+    input_buffer = input_buffer.substring(0, cursor_pos) + c + input_buffer.substring(cursor_pos);
+    cursor_pos++;
+}
+
 void doEditorBackspace() {
     if (cursor_pos > 0) {
         input_buffer.remove(cursor_pos - 1, 1);
         cursor_pos--;
     }
-    if (ble_active && bleKeyboard.isConnected()) bleKeyboard.write(178); // BLE Backspace
 }
 
-/**
- * Moves the cursor one position to the left.
- */
 void doEditorLeft() {
     if (cursor_pos > 0) cursor_pos--;
-    if (ble_active && bleKeyboard.isConnected()) bleKeyboard.write(216); // BLE Left
 }
 
-/**
- * Moves the cursor one position to the right.
- */
 void doEditorRight() {
     if (cursor_pos < (int)input_buffer.length()) cursor_pos++;
-    if (ble_active && bleKeyboard.isConnected()) bleKeyboard.write(215); // BLE Right
 }
 
-/**
- * Compiles the current formula, resets the timeline, and syncs over BLE.
- */
 void doEditorEnter() {
     saveUndo();
     bg_sprite.fillScreen(theme.bg);
     bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
     extern void applyCompilationResult(bool valid, String prefix = "");
     applyCompilationResult(valid);
-    if (ble_active && bleKeyboard.isConnected()) bleKeyboard.write(176); // BLE Enter
 }
 
-/**
- * Toggles between Infix and RPN modes and decompiles the current buffer.
- */
 void doEditorTab() {
     rpn_mode = !rpn_mode;
     input_buffer = decompile(rpn_mode);
     cursor_pos = input_buffer.length();
 }
 
-/**
- * Stops playback and broadcasts the stop command to synced devices.
- */
 void doEditorStop() {
     is_playing = false;
     t_raw = 0;
@@ -102,9 +126,6 @@ void doEditorStop() {
     if (is_sync_master) broadcastStop();
 }
 
-/**
- * Stops playback, clears the editor buffer, and resets the screen.
- */
 void doEditorClearAll() {
     is_playing = false;
     t_raw = 0;
@@ -184,7 +205,6 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
 
         } else {
             // Push pure silence to keep the I2S clocks running and the amplifier awake.
-            // This prevents the DAC from sleeping and eating the first 200ms of audio!
             memset(pcm_buffer, 0, sizeof(pcm_buffer));
             audioOut.pushStereoBlock(pcm_buffer, AUDIO_BUF_SIZE);
             
@@ -196,8 +216,6 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
 
 /**
  * Updates UI and evaluator state based on compilation results.
- * @param valid Boolean indicating if the compilation was successful
- * @param prefix Optional prefix string for the status message
  */
 void applyCompilationResult(bool valid, String prefix = "") {
     if (valid) {
@@ -227,10 +245,9 @@ void processUIRingBuffer() {
 
 /**
  * Core 0 UI/Input Task. Handles Keyboard, IMU, Screen, and Networking.
- * @param pvParameters FreeRTOS task params
  */
 void uiTask(void *pvParameters) {
-    static uint32_t last_imu_poll = 0; 
+    static uint32_t last_sensor_poll = 0; 
     
     // Universal Auto-Repeat State Machine
     enum RepeatAction { REP_NONE, REP_CHAR, REP_BACKSPACE, REP_LEFT, REP_RIGHT };
@@ -252,6 +269,7 @@ void uiTask(void *pvParameters) {
             var_count = 0;
             memset(vars, 0, sizeof(vars));
             clear_global_array();
+            updateRuntimeVars();
 
             bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
             applyCompilationResult(valid, "SYNC RX ");
@@ -260,9 +278,13 @@ void uiTask(void *pvParameters) {
             pending_code_update = false;
         }
 
-        // 20Hz NON-BLOCKING IMU POLLING
-        if (millis() - last_imu_poll > 50) {
-            last_imu_poll = millis();
+        // 20Hz NON-BLOCKING BACKGROUND POLLING
+        if (millis() - last_sensor_poll > 50) {
+            last_sensor_poll = millis();
+
+            // Re-inject variables into VM to protect against memory wipes
+            updateRuntimeVars();
+
             M5.Imu.update();
             auto imu = M5.Imu.getImuData();
             updateIMUVars(imu.accel.x, imu.accel.y, imu.accel.z, 
@@ -278,7 +300,7 @@ void uiTask(void *pvParameters) {
         if (st.opt) snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
         else if (st.alt) snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
         else if (st.ctrl) snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
-        else if (st.fn) strncpy(current_top_text, "FN: B/W/T/S/F/L/M/R/Arr", 63); 
+        else if (st.fn) strncpy(current_top_text, "FN: W/T/S/F/L/M/P/R/Arr", 63); 
         else strncpy(current_top_text, "BYTEBED", 63); 
         current_top_text[63] = '\0'; 
 
@@ -289,13 +311,6 @@ void uiTask(void *pvParameters) {
 
             // 1. SYSTEM COMMANDS & BANK SWITCHING (CTRL)
             if (st.ctrl) {
-                // BLE Overwrites
-                if (M5Cardputer.Keyboard.isKeyPressed('a') || M5Cardputer.Keyboard.isKeyPressed('A')) {
-                    syncPatchToBLE();
-                }
-                if (M5Cardputer.Keyboard.isKeyPressed('r') || M5Cardputer.Keyboard.isKeyPressed('R')) {
-                    sendBLECombo('r');
-                }
 
                 // Bank switching logic
                 bool bankChanged = false;
@@ -326,6 +341,7 @@ void uiTask(void *pvParameters) {
                     current_sample_rate = slots[current_bank][target_patch].sample_rate;
                     current_play_mode = slots[current_bank][target_patch].mode;
                     audioOut.setRate(current_sample_rate);
+                    updateRuntimeVars();
                     cursor_pos = input_buffer.length(); 
                     rpn_mode = false; 
                     saveUndo(); 
@@ -335,25 +351,19 @@ void uiTask(void *pvParameters) {
                     bg_sprite.fillScreen(theme.bg);
                     applyCompilationResult(valid, "B" + String(current_bank) + " P" + String(target_patch) + " ");
                     
-                    // Push to swarm if we are the master
                     if (is_sync_master) {
                         broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT);
                         broadcastPlay(0); 
                     }
-                    
-                    syncPatchToBLE();
                 } else {
-                    // Undo
                     if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
                         int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
                         if (undo_stack[prev] != "") { 
                             undo_ptr = prev; 
                             input_buffer = undo_stack[undo_ptr]; 
                             cursor_pos = input_buffer.length(); 
-                            sendBLECombo('z');
                         } 
                     }
-                    // Redo
                     if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
                         if (undo_ptr != undo_max) { 
                             undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
@@ -392,6 +402,7 @@ void uiTask(void *pvParameters) {
                     current_sample_rate = slots[current_bank][target_slot].sample_rate;
                     current_play_mode = slots[current_bank][target_slot].mode;
                     audioOut.setRate(current_sample_rate);
+                    updateRuntimeVars();
                     cursor_pos = input_buffer.length(); rpn_mode = false; saveUndo(); t_raw = 0;
                     
                     bool valid = compileInfix(input_buffer, false); 
@@ -402,7 +413,6 @@ void uiTask(void *pvParameters) {
                         broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT); 
                         broadcastPlay(0); 
                     }
-                    syncPatchToBLE();
                 }
             } 
             
@@ -452,7 +462,7 @@ void uiTask(void *pvParameters) {
                         if (!is_sync_initialized) { initESPNowSync(); is_sync_initialized = true; }
                         is_sync_master = false; status_msg = "SYNC: LISTENING"; status_timer = millis() + 1500;
                     }
-                    if (c == 'm' || c == 'M') {
+                    if (c == 'p' || c == 'P') {
                         if (is_streaming) { WiFi.softAPdisconnect(true); is_streaming = false; delay(50); }
                         if (!is_sync_initialized) { initESPNowSync(); is_sync_initialized = true; }
                         if (!is_sync_master) {
@@ -462,11 +472,29 @@ void uiTask(void *pvParameters) {
                         }
                         status_timer = millis() + 1500;
                     }
-                    if (c == 'b' || c == 'B') {
-                        ble_active = !ble_active;
-                        if (ble_active) bleKeyboard.begin(); else bleKeyboard.end();
-                        status_msg = ble_active ? "BLE START" : "BLE STOP"; status_timer = millis() + 1500;
+                    
+                    // --- SAFE USB STAGGERED BOOT ---
+                    if (c == 'm' || c == 'M') {
+                        usb_midi_enabled = !usb_midi_enabled;
+                        if (usb_midi_enabled) {
+                            if (midiTaskHandle == NULL) {
+                                midiHandler.setNoteOnCallback(onNoteOn);
+                                midiHandler.setNoteOffCallback(onNoteOff);
+                                midiHandler.begin();
+                                USB.begin(); 
+                                xTaskCreatePinnedToCore(midiTask, "MidiTask", 4096, NULL, 5, &midiTaskHandle, 0);
+                            } else {
+                                vTaskResume(midiTaskHandle);
+                            }
+                            status_msg = "USB MIDI: ON";
+                        } else {
+                            if (midiTaskHandle != NULL) vTaskSuspend(midiTaskHandle);
+                            updateMIDIVars(current_midi_freq, 0.0f, 0);
+                            status_msg = "USB MIDI: OFF";
+                        }
+                        status_timer = millis() + 1500;
                     }
+                    
                     if (c == 'r' || c == 'R') {
                         t_raw = 0; status_msg = "TIMELINE RESET"; status_timer = millis() + 1500;
                         if (is_sync_master) broadcastPlay(0);
@@ -490,10 +518,12 @@ void uiTask(void *pvParameters) {
                         else if (current_sample_rate == 44100) current_sample_rate = 48000;
                         else current_sample_rate = 8000;
                         audioOut.setRate(current_sample_rate); status_msg = "RATE: " + String(current_sample_rate) + "Hz"; status_timer = millis() + 1500;
+                        updateRuntimeVars();
                     }
                     if (c == 'f' || c == 'F') {
                         current_play_mode = (current_play_mode == MODE_BYTEBEAT) ? MODE_FLOATBEAT : MODE_BYTEBEAT;
                         var_count = 0; memset(vars, 0, sizeof(vars)); clear_global_array(); 
+                        updateRuntimeVars();
                         bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
                         status_msg = (current_play_mode == MODE_BYTEBEAT) ? "MODE: BYTEBEAT" : "MODE: FLOATBEAT"; status_timer = millis() + 1500;
                     }
@@ -507,14 +537,8 @@ void uiTask(void *pvParameters) {
                     if (c == ';') { volume_perc = std::min(1.0f, volume_perc + VOL_STEP); }
                     if (c == '.') { volume_perc = std::max(0.0f, volume_perc - VOL_STEP); }
                     
-                    if (c == ',') { 
-                        doEditorLeft();
-                        rep_action = REP_LEFT; rep_timer = millis() + 400; 
-                    }
-                    if (c == '/') { 
-                        doEditorRight();
-                        rep_action = REP_RIGHT; rep_timer = millis() + 400; 
-                    }
+                    if (c == ',') { doEditorLeft(); rep_action = REP_LEFT; rep_timer = millis() + 400; }
+                    if (c == '/') { doEditorRight(); rep_action = REP_RIGHT; rep_timer = millis() + 400; }
                 }
 
                 if (M5Cardputer.Keyboard.isKeyPressed('`')) {
@@ -522,11 +546,10 @@ void uiTask(void *pvParameters) {
                 }
             } 
             
-            // 5. STANDARD TYPING (Catches normal AND shifted characters, bypassing ghosted modifiers)
+            // 5. STANDARD TYPING
             else if (!st.ctrl && !st.alt && !st.opt && !st.fn) {
                 bool key_handled = false;
 
-                // A. Process text characters cleanly (NO MACROS HERE)
                 if (st.word.size() > 0) {
                     for (auto i : st.word) { 
                         if (i == '`') {
@@ -550,7 +573,6 @@ void uiTask(void *pvParameters) {
                     }
                 }
 
-                // B. Fallback for physical buttons if the text loop missed them
                 if (!key_handled) {
                     if (M5Cardputer.Keyboard.isKeyPressed(KEY_TAB)) {
                         doEditorTab();
@@ -566,10 +588,7 @@ void uiTask(void *pvParameters) {
             }
         }
         
-        // --- Universal Auto-Repeat Logic (Runs continuously) ---
         bool keep_repeating = false;
-        
-        // Block standard repeats if modifiers are suddenly pressed
         bool no_mods_or_shift = (!st.ctrl || st.shift) && (!st.alt || st.shift) && (!st.opt || st.shift) && (!st.fn || st.shift);
         
         if (rep_action == REP_LEFT) {
@@ -595,7 +614,7 @@ void uiTask(void *pvParameters) {
         }
         
         if (!keep_repeating) {
-            rep_action = REP_NONE; // Reset state if key is released or modifiers change
+            rep_action = REP_NONE; 
         }
         
         if (millis() - last_draw > UI_REFRESH_MS) { 
@@ -607,10 +626,12 @@ void uiTask(void *pvParameters) {
 }
 
 /**
- * Standard Setup. Initializes Hardware, Math, NVS Presets, and dual tasks.
+ * Standard Setup. 
  */
 void setup() {
-    is_playing = false; // Pause playback to allow UI and NVS to load completely first
+    delay(1000); 
+
+    is_playing = false; 
     
     if (WIPE_NVRAM) { 
         nvs_flash_erase(); 
@@ -638,10 +659,7 @@ void setup() {
     
     prefs.begin("bytebeat", false);
     
-    // --- ROTATING BOOT PATCH INDEX ---
-    // Retrieve the last boot index, default to 0 if it doesn't exist
     int boot_idx = prefs.getInt("boot_idx", 0);
-    // Increment and wrap around 0-9, then save it for the next boot
     prefs.putInt("boot_idx", (boot_idx + 1) % 10);
     
     for (int b = 0; b < 10; b++) {
@@ -683,7 +701,6 @@ void setup() {
         }
     }
     
-    // SET BANK 1 AS DEFAULT WITH ROTATING BOOT INDEX
     current_bank = 1; 
     input_buffer = slots[1][boot_idx].formula; 
     current_sample_rate = slots[1][boot_idx].sample_rate;
@@ -691,6 +708,7 @@ void setup() {
     cursor_pos = input_buffer.length(); 
     
     audioOut.begin(current_sample_rate);
+    updateRuntimeVars();
     
     undo_stack[0] = input_buffer;
     compileInfix(input_buffer, true);
@@ -698,49 +716,36 @@ void setup() {
     
     xTaskCreatePinnedToCore(playBytebeat, "audio", 8192, NULL, 24, NULL, 1);
     
-    // --- SPLASH SCREEN WITH GLITCH EFFECT ---
-    // Runs for 1.5 seconds while the audio task pushes pure silence to wake up the DAC.
     uint32_t splash_start = millis();
     M5Cardputer.Display.setTextDatum(middle_center);
     M5Cardputer.Display.setTextFont(1);
     M5Cardputer.Display.setTextSize(4);
     
     while (millis() - splash_start < 1500) {
-        // Randomly clear the screen to create flickering
         if (random(10) > 7) {
             M5Cardputer.Display.fillScreen(0x0000);
         }
-        
-        // Slight X/Y offsets for a jittering effect
         int ox = random(-4, 5);
         int oy = random(-2, 3);
-        
-        // Cycle between terminal green colors
         uint16_t glitch_colors[] = {0x07E0, 0x0600};
         
         M5Cardputer.Display.setTextColor(glitch_colors[random(2)]);
         M5Cardputer.Display.drawString("BYTEBED", 120 + ox, 67 + oy);
         
-        // Random horizontal slice simulating tracking issues
         if (random(10) > 5) {
             M5Cardputer.Display.fillRect(0, random(135), 240, random(2, 6), 0x0000);
         }
-        
-        delay(random(20, 80)); // Variable framerate makes the glitch feel organic
+        delay(random(20, 80)); 
     }
     
-    M5Cardputer.Display.fillScreen(theme.bg); // Clear screen cleanly when finished
+    M5Cardputer.Display.fillScreen(theme.bg); 
     
-    // Start the UI task only after the splash screen finishes
     xTaskCreatePinnedToCore(uiTask, "ui_task", 8192, NULL, 5, NULL, 0);
 
     t_raw = 0;
     is_playing = true; 
 }
 
-/**
- * Main loop. Idles and yields to FreeRTOS tasks.
- */
 void loop() { 
     vTaskDelay(portMAX_DELAY); 
 }

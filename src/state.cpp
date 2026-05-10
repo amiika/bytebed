@@ -34,20 +34,23 @@ int current_sample_rate = DEFAULT_SAMPLE_RATE;
 #define EMPTY_PRESET {"t", 8000, MODE_BYTEBEAT}
 
 const PresetConfig defaultBanks[10][10] = {
+    // BANK 0: INITIAL/EMPTY
     { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET },
+    
     // BANK 1: CLASSIC (8kHz Bytebeat)
     {
-        {"(t<<3)*[8/9,1,9/8,6/5,4/3,3/2,0]['0131556556444444012044644633333301313364462222221100444444333333'[t>>10&63]]", 8000, MODE_BYTEBEAT},
+        {"t*[0,8/9,1,9/8,6/5,4/3,3/2]['1242660660555555123155055044444412424405503333332211555555444444'[t>>10]]*4", 8000, MODE_BYTEBEAT},
         {"(t*5&t>>7)|(t*3&t>>10)", 8000, MODE_BYTEBEAT},
         {"(t>>6|t<<1)+(t>>5|t<<3|t>>10)", 8000, MODE_BYTEBEAT},
         {"t*(42&t>>10)", 8000, MODE_BYTEBEAT},
         {"t>>4|t>>5|t%256", 8000, MODE_BYTEBEAT},
-        {"t*(t>>5|t>>8)>>8&63", 8000, MODE_BYTEBEAT},
+        {"t*[0,1,1.2,4/3,3/2,8/5,16/9,2]['110033003333004455003300330030504400220022004400550033003300303011003300333300445500330033003355777766665050404055003300333300557700770066005500444422332200202040606060605050404055003300333300557700770066005500444433222222404060606060505040405500330033330033'[t>>9]]*3", 8000, MODE_BYTEBEAT},
         {"(t*t/(1+t>>10))&t>>8", 8000, MODE_BYTEBEAT},
         {"t&t>>8", 8000, MODE_BYTEBEAT},
         {"t*(t>>11&t>>8&123&t>>3)", 8000, MODE_BYTEBEAT},
         {"t*((t>>12|t>>8)&63&t>>4)", 8000, MODE_BYTEBEAT},
-     },
+    },
+    
     // BANK 2: TESTS (8kHz Bytebeat)
     {
         {"g=(n)=>{n<1?1:n%2<1?g(n/2):2*g(n/2)}; g(t>>7)*(t&128|t>>4)", 8000, MODE_BYTEBEAT}, 
@@ -59,8 +62,9 @@ const PresetConfig defaultBanks[10][10] = {
         {"a=t*2**([1,2,3][t>>22&3]/4),b=t*2**([1,2,3][t>>11&63]/12+2),(3*a^t>>6&256/'1112'[t>>14&3]-1|a)%256*2/3+(b^b*2)%256/3", 8000, MODE_BYTEBEAT},                                               
         {"a=[1,2,3][(t>>10)%4]*[2,4,5,6][(t>>16)%4]*t,b=a%32+t>>a,c=b%t+a,[(t>>a)+b,c]", 32000, MODE_BYTEBEAT},                                  
         {"t*(4|t>>13&3)>>(~t>>11&1)&128|t*(t>>11&t>>13)*(~t>>9&3)&127", 8000, MODE_BYTEBEAT}, 
-        {"t*=10000/44100,w=(t/8*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.3,6,4.8,5.4,2.7,1.35,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][(t>>11)%32]*1.52),c=(100000/(t&4095)&64),e=(t*[1,1,1,1,4/6,4.8/8,1,1][t>>13&7]*1.52)%256/4,v=random()*((-t>>5)%64+64),k=32,min(255,w%k+w*1.99%k+w*.505%k+c+e+v/1.2)", 48000, MODE_BYTEBEAT} // "kernkraft 400" by hcdphobe
+        {"t*=10000/44100,w=(t/8*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.3,6,4.8,5.4,2.7,1.35,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][(t>>11)%32]*1.52),c=(100000/(t&4095)&64),e=(t*[1,1,1,1,4/6,4.8/8,1,1][t>>13&7]*1.52)%256/4,v=random()*((-t>>5)%64+64),k=32,min(255,w%k+w*1.99%k+w*.505%k+c+e+v/1.2)", 48000, MODE_BYTEBEAT} 
     },
+    
     // BANK 3: FLOATBEAT (48kHz Floatbeat)
     {
         {"gc=t/(t/[12,13,14,15,16,17,18,19,20,21,22,23,24][t>>12&13]),(sin(t/gc)+sin(t/20)+sin(t/20)+tan(sin(t/t-t/(gc+.01))))/4", 48000, MODE_FLOATBEAT},                                                                 
@@ -69,14 +73,15 @@ const PresetConfig defaultBanks[10][10] = {
         {"p=t*2**([0,4,7,12][(t>>13)%4]/12)/2.43, sin(p*PI/16)*exp(-(t%8192)/2000)", 48000, MODE_FLOATBEAT},  
         {"p=(t>>15&t>>13)*[3,2,1.5,0][3&t>>11]/2,b=.5*[1,2][1&t>>13]*[2,2.5,3,3.5][3&t>>15]/2,sin(sin(p*t/4.79)/40*(32-t/256%32)+p*t/40.743665)*(32-t/256%32)/64+sin(sin(b*t/81.48732)/6*(32-t/256%32)+b*t/40.743665)*(32-t/256%32)/48", 48000, MODE_FLOATBEAT},                                  
         {"w=t/20, sin(w)*abs(sin(t/4000))", 48000, MODE_FLOATBEAT},
-        {"t/=48000,k=sin((t*4%2+.01)**0.5*200),m=0,g=2**((m+70)/12),b=sin(t*6000)*((1-(t*3%1))**12),((t*g%1)-.5)*.4+k*.5+b*.31", 48000, MODE_FLOATBEAT},                                           
+        {"t/=48000,k=sin((t*4%2+.01)**0.5*200),m=0,g=2**(m/12),b=sin(t*6000)*((1-(t*2.1%1))**12),((t*g%1)-.5)*.4+k*.5+b*.31", 48000, MODE_FLOATBEAT},                                           
         {"e=256,r=40,d=32,p=t*2**([0,12,12,0,12,12,5,7][7&t>>13]/12)/2.43,env=r-t/e%d,sin(sin(sin(p*PI/16)/76*env+p*PI/256)/8*env+p*PI/256)*env/64", 48000, MODE_FLOATBEAT}, 
         {"x = (lr) => sum(3,i=>s(t*0.03*2**(i)*lr+s(t*0.005)*2))/3,[x(1.01),x(0.99)]", 48000, MODE_FLOATBEAT},                                         
         {"sin(t/(t&16384?1.5:1)/[1,2,3,4,1,2,3,4,6,4,5,4,8,8,8,8][15&t>>10])/((t&[1023,1023,1023,2047][3&t>>12])*.01)", 48000, MODE_FLOATBEAT}                                                  
     },
-    // BANKS 4: EMPTY PRESETS
+    
+    // BANK 4: FLOATBEAT SUM & REDUCE PATTERNS
     {
-        {"s(t * (100 + ax * 150) * 0.01)", 48000, MODE_FLOATBEAT},                                                                 
+        {"t%16384||(a=$[220],m=r()*.5+.1,sum(220,i=>a[i]=r()*2-1)),a[t]=a[t]*m+a[t-1]*(1-m)", 48000, MODE_FLOATBEAT},                                                                 
         {"sum(12,i=>s(t*0.015*(i+1))*(4-i))/25", 48000, MODE_FLOATBEAT},                                             
         {"p=1000/(t%123456),sum(12,i=>s(t*p*(i*2+1))/(i*2))", 48000, MODE_FLOATBEAT},                                               
         {"p=t*0.25,sum(4,i=>s(p*(1+i*0.25))*s(t*0.0005*(i+0.25)))/4", 48000, MODE_FLOATBEAT},  
@@ -85,24 +90,66 @@ const PresetConfig defaultBanks[10][10] = {
         {"[20.0, 10.0, 5.0, 2.5].reduce((a, v) => s(t * v * 0.001 + a * 2.0))", 48000, MODE_FLOATBEAT}, 
         {"[1,3,5,7].reduce((a,v)=>max(a,s(t*v*0.0015)/v))", 48000, MODE_FLOATBEAT},                                         
         {"c=[1.0,1.2,1.5,1.8],o=1+(floor(t/16000)%2),f=c.map(x=>x*100*o),f.sum(n=>s(t *n*0.005))/4*exp(-(t%1000)/500)", 48000, MODE_FLOATBEAT},                                               
-        {"t/=48E3,v=t*2**7.4284905,y=a=>32-v/a%32,u=r=>r%256/128-1,i=(u(v*143&1&&255)/4+.5*random()-.25)*y(1)/16,f=sin(16*cbrt(128*v%4096)),z=v*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.33,6,4.8,5.4,2.7,1.35,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][(v>>5)%32]*1.52*PI,sin(z+sin(z)*atan(sin(z/4))*1.09**y(1))/2*y(1)/32+[f,i,f,i,f,i,f,f][(v>>5)%8]/2", 48000, MODE_FLOATBEAT}, // Remix of "kernkraft 400" by hcdphobe
+        {"t/=48E3,v=t*2**7.4284905,y=a=>32-v/a%32,u=r=>r%256/128-1,i=(u(v*143&1&&255)/4+.5*random()-.25)*y(1)/16,f=sin(16*cbrt(128*v%4096)),z=v*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.33,6,4.8,5.4,2.7,1.35,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][(v>>5)%32]*1.52*PI,sin(z+sin(z)*atan(sin(z/4))*1.09**y(1))/2*y(1)/32+[f,i,f,i,f,i,f,f][(v>>5)%8]/2", 48000, MODE_FLOATBEAT}, 
     },
-    // BANK 5: Testing accelerometer and gyroscope
+    
+    // BANK 5: ACCELEROMETER & GYROSCOPE
     {
         {"s(t * (100 + ax * 150) * 0.01)", 48000, MODE_FLOATBEAT},                                                                 
         {"(r() - 0.5) * min(1.0, abs(gx) * 0.02)", 48000, MODE_FLOATBEAT},                                             
         {"s(t * (0.015 + abs(gy) * 0.0001)) * (0.2 + abs(gy) * 0.01)", 48000, MODE_FLOATBEAT},                                               
         {"s(t * 0.01 + s(t * 0.002) * gz * 0.05)", 48000, MODE_FLOATBEAT},  
-        {"gen(6, i => (f := (i + 1) * (80 + ax * 40)) * s(t * f * 0.005 + s(t * 0.002) * abs(gy) * 25) * exp(-( (t + i * 2400) % 14400) / (300 + abs(gx) * 10))).sum(x => x) / 6", 48000, MODE_FLOATBEAT},                                  
+        {"gen(6, i => (f = (i + 1) * (80 + ax * 40)) * s(t * f * 0.005 + s(t * 0.002) * abs(gy) * 25) * exp(-( (t + i * 2400) % 14400) / (300 + abs(gx) * 10))).sum(x => x) / 6", 48000, MODE_FLOATBEAT},                                  
         {"p=t*0.015,x=L=>sum(4,i=>s(p*(i+1)*L+s(t*0.001*i)))/ 4,[x(1.0),x(1.005)]", 48000, MODE_FLOATBEAT},                                           
         {"p=t*pi/16/2**(t/3e6),f=x=>s(x+s(x)),x=L=>sum(3,i=>f(p*L/2**(i*9/12))*5**(-.00007214*(t%(65536*2**(i/2)))))/6,[x(0.105),x(.95)]", 48000, MODE_FLOATBEAT},                                           
         {"[20.0, 10.0, 5.0, 2.5].reduce((a, v) => s(t * v * 0.001 + a * 2.0))", 48000, MODE_FLOATBEAT}, 
         {"[1,3,5,7].reduce((a,v)=>max(a,s(t*v*0.0015)/v))", 48000, MODE_FLOATBEAT},                                         
         {"c=[1.0,1.2,1.5,1.8],o=1+(floor(t/16000)%2),f=c.map(x=>x*100*o),f.sum(n=>s(t *n*0.005))/4*exp(-(t%1000)/500)", 48000, MODE_FLOATBEAT}                                                  
     },
-    { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET },
-    { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET },
-    { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET },
+    
+    // BANK 6: MONOPHONIC MIDI (mf & mg parameters)
+    { 
+        {"(t * mf * 256 / sr) * mg", 8000, MODE_BYTEBEAT}, 
+        {"((t * mf * 256 / sr) & ((t>>4)&255)) * mg", 8000, MODE_BYTEBEAT},
+        {"T=t*8000/sr,((t*mf/64)*(3+(3&T>>14))>>(3&T>>9)|T>>6)", 8000, MODE_BYTEBEAT},
+        {"t * mf * 256 / sr * (1 + ((t>>11)&1)) * mg", 8000, MODE_BYTEBEAT},                                  
+        {"((t - t%4) * mf * 256 / sr) * mg", 11025, MODE_BYTEBEAT},
+        {"v+=(mg-v)*0.01,p=t*mf*16/sr,128+(p&15)*(-p&15)*((p&16)/8-1)*128/64*v", 8000, MODE_BYTEBEAT}, 
+        {"(t * mf * 256 / sr) * (t>>8 & 1) * mg", 8000, MODE_BYTEBEAT},
+        {"(t * mf * 256 / sr) % (128 + ((t>>3)&127)) * mg", 8000, MODE_BYTEBEAT},
+        {"f=t*mf*20/sr*tau|0,f&f>>2", 8000, MODE_BYTEBEAT},
+        {"(t * mf / sr * 128) * mg", 8000, MODE_BYTEBEAT} 
+    },
+    
+    // BANK 7: MONOPHONIC MIDI (Raw mn parameters)
+    {
+        {"(t * mn) * mg", 8000, MODE_BYTEBEAT}, 
+        {"(t * (mn ^ (t >> 10))) * mg", 8000, MODE_BYTEBEAT}, 
+        {"t * mn & t", 8000, MODE_BYTEBEAT},
+        {"(t * mn & t >> 4) * mg", 8000, MODE_BYTEBEAT},
+        {"(t * mn | t * (mn + 7)) * mg", 8000, MODE_BYTEBEAT},
+        {"((t * mn) % 255) * mg", 8000, MODE_BYTEBEAT},                                               
+        {"t * (mn + (t >> 12 & 7)) * mg", 8000, MODE_BYTEBEAT},                                  
+        {"(t * mn ^ t * (mn + 3)) * mg", 8000, MODE_BYTEBEAT}, 
+        {"t * mn * (mn & 1 ? 1 : 2)", 8000, MODE_BYTEBEAT}, 
+        {"t * (mn ^ 2) & t >> 6 | t >> 4", 8000, MODE_BYTEBEAT}
+    }, 
+    
+    // BANK 8: FLOATBEAT MIDI (mf, mg, & mn)
+    {
+        {"f=t*mf*tau/sr,e=mg*30,sin(sin(sin(f*16)/76*e+f)/8*e+f)*e/64", 48000, MODE_FLOATBEAT}, 
+        {"v += (mg - v) * 0.001, s(t * mf * TAU / sr) * v * 0.5", 48000, MODE_FLOATBEAT},                                                                  
+        {"s(t * mf * 6.283 / sr + s(t * mf * 12.566 / sr) * 2.0) * mg * 0.2", 48000, MODE_FLOATBEAT},
+        {"p=(p+mf*TAU/sr)%TAU,q=(q+mf/1.5*TAU/sr)%TAU,T=t*TAU/sr,(.8*s((.8*(abs(q*INVPI-1)*2-1)+.05*s(p*2))*(2+(1+s(T*.18))*(2+(1+s(T*.04))*12))+T)+.7*s(p))*0.25", 48000, MODE_FLOATBEAT},  
+        {"v += (mg - v) * 0.001, s(t * mf * TAU / sr) * s(t * 15 * TAU / sr) * v * 0.5", 48000, MODE_FLOATBEAT},  
+        {"v+=(mg-v),T=t*sr,p=(p+mf*TAU/sr)%TAU,E=t%9,s(s(s(s(p*28)/8*E+p*6)/3*E+p*0.5)+p)*v/1.5", 48000, MODE_FLOATBEAT},
+        {"v+=(1-v)*.005,L=t/sr,m=b=>((L*mf*2**((b-54)/12))%1)*2-1,(m(62)*.29+m(53)*.46+m(58)*.34+m(70)*.17)*v*.4", 48000, MODE_FLOATBEAT},                                           
+        {"L=t/sr,sum(7,k=>(i=k*PI/3,T=max(0,L-i),W=T%PI,f=mf*(1+i/.75%4)*[.737,.415,.322,.17][T/PI],s(TAU*(T*f%1))*exp(-W*1.5)*min(1,W*50)*(.12-k*.015)))", 48000, MODE_FLOATBEAT}, 
+        {"p=(p+mf*PI/sr)%TAU,x=tan(cos(p+s(p)*1.5)*0.9),s(0.15*exp(exp(abs(x))))*0.5", 48000, MODE_FLOATBEAT},                                         
+        {"v+=(mg-v)*.005,w+=(mg-w)*.00005,P=t*mf*TAU/sr,E=8+32*(v-w),sin(sin(sin(P*16)/100*E+P)/8*E+P)*E/64*v", 48000, MODE_FLOATBEAT}                                                  
+    },
+    
+    // BANK 9: EMPTY
     { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET }
 };
 

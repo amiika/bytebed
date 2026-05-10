@@ -15,6 +15,20 @@
             height: 100vh; overflow: hidden; 
         }
         
+        #corner-buttons {
+            position: fixed;
+            top: 15px;
+            right: 15px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+
+        #corner-buttons .btn-icon {
+            font-family: 'VT323', sans-serif;
+            font-size: 24px;
+        }
+
         #container { 
             width: 95%;
             max-width: 1000px;
@@ -23,6 +37,7 @@
             border: 1px solid #111; border-radius: 4px; 
             display: flex; flex-direction: column; 
             box-shadow: 0 0 20px rgba(0,0,0,0.8);
+            position: relative;
         }
         
         #header { 
@@ -134,30 +149,99 @@
             font-size: 18px; 
         }
 
+        #settings-modal {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.85);
+            z-index: 200;
+            justify-content: center;
+            align-items: center;
+            backdrop-filter: blur(4px);
+            font-family: 'VT323', sans-serif;
+        }
+
+        .modal-content {
+            background: #050505;
+            border: 1px solid #00ff00;
+            padding: 25px;
+            width: 85%;
+            max-width: 500px;
+            position: relative;
+            box-shadow: 0 0 30px rgba(0, 255, 0, 0.15);
+            border-radius: 4px;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            cursor: pointer;
+            font-size: 28px;
+            color: #00ff00;
+            user-select: none;
+        }
+
+        .modal-close:active { transform: scale(0.9); }
+
+        .modal-content h2 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            text-shadow: 0 0 8px rgba(0, 255, 0, 0.4);
+        }
+
+        .modal-content p.desc {
+            font-size: 18px;
+            line-height: 1.4;
+            color: #aaa;
+            margin-bottom: 20px;
+        }
+
+        .modal-section {
+            margin-top: 20px;
+            border-top: 1px dashed #004400;
+            padding-top: 15px;
+        }
+
+        .modal-section h3 {
+            margin: 0 0 10px 0;
+            font-size: 20px;
+            color: #00cc00;
+        }
+
         @media (min-width: 768px) {
             #container { width: 80%; height: 600px; }
-            #header { flex-direction: row; justify-content: space-between; }
-            .meta { text-align: left; }
-            .controls { overflow-x: visible; }
+            #header { flex-direction: row; justify-content: space-between; align-items: center; }
+            .meta { text-align: left; margin: 0; }
+            .controls { overflow-x: visible; justify-content: flex-end; flex-grow: 1; }
             textarea { height: 120px; }
         }
     </style>
 </head>
 <body>
+    <div id="corner-buttons">
+        <span id="settings-btn" class="btn btn-icon" title="Setup & Info">?</span>
+        <span id="share-btn" class="btn btn-icon" title="Share URL" onclick="shareCode(event)">↗&#xFE0E;</span>
+    </div>
+
     <div id="container">
         <div id="header">
             <div class="meta" id="status">BYTEBED</div>
             <div class="controls">
+                <span id="rate-btn" class="btn" title="Sample rate" onclick="cycleRate(event)">8000HZ</span>
+                <span id="format-btn" class="btn" title="Bytebeat mode" onclick="toggleFormat(event)">BYTEBEAT</span>
+
+                <span id="bank-btn" class="btn" title="Bank" onclick="cycleBank(event)">B: 1</span>
+                <span id="patch-btn" class="btn" title="Patch" onclick="cyclePatch(event)">P: 0</span>
+                
+                <span id="vis-btn" class="btn" title="Visualization mode" onclick="toggleVis(event)">WAVEFORM</span>
+                <span class="btn btn-icon" title="Zoom in" onclick="zoomIn(event)">＋&#xFE0E;</span>
+                <span class="btn btn-icon" title="Zoom out" onclick="zoomOut(event)">－&#xFE0E;</span>
+                <span id="mode-btn" class="btn active" title="Syntax mode" onclick="toggleMode(event)">INFIX</span>
+                <span id="btn-auto" class="btn active" title="Auto compile" onclick="toggleAuto(event)">AUTO</span>
+
                 <span id="play-btn" class="btn btn-icon" onclick="togglePlay(event)">▶&#xFE0E;</span>
                 <span id="stop-btn" class="btn btn-icon" onclick="resetT(event)">▢&#xFE0E;</span>
-                <span id="rate-btn" class="btn" onclick="cycleRate(event)">8000HZ</span>
-                <span id="format-btn" class="btn active" onclick="toggleFormat(event)">BYTEBEAT</span>
-                <span class="btn btn-icon" onclick="zoomIn(event)">＋&#xFE0E;</span>
-                <span id="vis-btn" class="btn" onclick="toggleVis(event)">WAVEFORM</span>
-                <span class="btn btn-icon" onclick="zoomOut(event)">－&#xFE0E;</span>
-                <span id="mode-btn" class="btn active" onclick="toggleMode(event)">INFIX</span>
-                <span id="btn-auto" class="btn active" onclick="toggleAuto(event)">AUTO</span>
-                <span id="share-btn" class="btn btn-icon" onclick="shareCode(event)">↗&#xFE0E;</span>
             </div>
         </div>
 
@@ -170,6 +254,37 @@
             <div id="error-display"></div>
         </div>
     </div>
+
+    <div id="settings-modal">
+        <div class="modal-content">
+            <span class="modal-close" id="close-modal">&times;</span>
+            <h2>BYTEBED SETUP</h2>
+            <p class="desc">Bytebeat bytecode virtual machine written in C++ for M5Stack Cardputers. This is the WASM version suitable for testing and sharing patches online. Source and binaries in <a href="https://github.com/amiika/bytebed">Github</a>.</p>
+            
+            <div class="modal-section">
+                <h3>MIDI CONFIGURATION</h3>
+                <div style="display: flex; gap: 6px;">
+                    <span id="midi-btn" class="btn" title="MIDI Port" onclick="cycleMIDI(event)">M: OFF</span>
+                    <span id="midi-chan-btn" class="btn active" title="MIDI Channel" onclick="cycleMIDIChannel(event)">C: ALL</span>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            const settingsBtn = document.getElementById("settings-btn");
+            const settingsModal = document.getElementById("settings-modal");
+            const closeModal = document.getElementById("close-modal");
+            
+            settingsBtn.addEventListener("click", () => settingsModal.style.display = "flex");
+            closeModal.addEventListener("click", () => settingsModal.style.display = "none");
+            settingsModal.addEventListener("click", (e) => {
+                if (e.target === settingsModal) settingsModal.style.display = "none";
+            });
+        });
+    </script>
     <script src="emulator.js"></script> 
 </body>
 </html>

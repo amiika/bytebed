@@ -501,6 +501,26 @@ void updateMouseVars(float mx, float my, float mv) {
 }
 
 /**
+ * Updates the virtual machine memory with active MIDI parameters.
+ * @param freq The frequency of the active MIDI note in Hertz
+ * @param gate The velocity/gate state (0.0 for off, >0.0 for active)
+ * @param note The raw MIDI note number (0-127)
+ */
+void updateMIDIVars(float freq, float gate, float note) {
+    int i_mf = getVarId("mf"); 
+    vars[i_mf].type = 0; 
+    vars[i_mf].f = sanitize(freq);
+
+    int i_mg = getVarId("mg"); 
+    vars[i_mg].type = 0; 
+    vars[i_mg].f = sanitize(gate);
+
+    int i_mn = getVarId("mn"); 
+    vars[i_mn].type = 0; 
+    vars[i_mn].f = sanitize(note);
+}
+
+/**
  * Ensures the global array has the requested capacity.
  * @param req_size The required size in float elements
  */

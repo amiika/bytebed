@@ -13,6 +13,17 @@ let isFloatbeat = false;
 const rates = [8000, 11025, 22050, 32000, 44100, 48000];
 let currentRateIdx = 0;
 
+let current_midi_note = 0;
+let current_midi_freq = 440.0;
+
+let midiInputs = [];
+// Load persisted states immediately
+let currentMidiPortIdx = parseInt(localStorage.getItem('bytebed_midi_port')) || -2; 
+let currentMidiChannel = parseInt(localStorage.getItem('bytebed_midi_chan')) || -1; 
+
+let currentBank = 1; 
+let currentPatch = 0;
+
 const canvasElem = document.getElementById('viz');
 const ctx = canvasElem.getContext('2d');
 const formulaInput = document.getElementById('formula');
@@ -21,11 +32,26 @@ const autoBtn = document.getElementById('btn-auto');
 const playBtn = document.getElementById('play-btn');
 const shareBtn = document.getElementById('share-btn');
 const visBtn = document.getElementById('vis-btn');
+const midiBtn = document.getElementById('midi-btn');
+const midiChanBtn = document.getElementById('midi-chan-btn');
+const bankBtn = document.getElementById('bank-btn');
+const patchBtn = document.getElementById('patch-btn');
 
+/**
+ * Computes a proper mathematical modulo supporting negative numbers.
+ * @param a The dividend
+ * @param b The divisor
+ * @return The positive remainder
+ */
 function mod(a, b) {
     return ((a % b) + b) % b;
 }
 
+/**
+ * Encodes a string into a URL-safe Base64 format.
+ * @param str The raw UTF-8 string input
+ * @return The URL-safe Base64 encoded string
+ */
 function base64UrlEncode(str) {
     const utf8Bytes = new TextEncoder().encode(str);
     let binaryStr = "";
@@ -36,6 +62,11 @@ function base64UrlEncode(str) {
     return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+/**
+ * Decodes a URL-safe Base64 string back into standard text.
+ * @param base64Url The URL-safe Base64 encoded string
+ * @return The decoded UTF-8 string
+ */
 function base64UrlDecode(base64Url) {
     let base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
     while (base64.length % 4) {
@@ -49,6 +80,9 @@ function base64UrlDecode(base64Url) {
     return new TextDecoder().decode(utf8Bytes);
 }
 
+/**
+ * Handles Web Audio API visualization buffering and canvas rendering.
+ */
 class Scope {
     constructor() {
         this.analyser = [null, null];
@@ -70,13 +104,16 @@ class Scope {
         this.maxDecibels = -10;
         this.minDecibels = -120;
     }
+    
     get timeCursorEnabled() {
         return (targetSampleRate >> this.drawScale) < 2000;
     }
+    
     clearCanvas() {
         this.canvasCtx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
         this.canvasCtx.globalCompositeOperation = this.drawMode === 'FFT' ? 'lighter' : 'source-over';
     }
+    
     drawGraphics(endTime) {
         if(!isFinite(endTime)) {
             resetT();
@@ -253,11 +290,13 @@ class Scope {
         }
         this.drawBuffer = [{ t: endTime, value: buffer[bufferLen - 1].value }];
     }
+    
     drawPointMono(data, i, color) {
         data[i++] = color[0];
         data[i++] = color[1];
         data[i] = color[2];
     }
+    
     drawPointStereo(data, i, color, colorCh, isRight) {
         if(isRight) {
             data[i + colorCh[1]] = color[colorCh[1]];
@@ -266,9 +305,11 @@ class Scope {
             data[i + colorCh[0]] = color[colorCh[0]];
         }
     }
+    
     getX(t) {
         return t / (1 << this.drawScale);
     }
+    
     setFFTAnalyzer() {
         if(this.analyser[0]) {
             this.analyser[0].fftSize = 2 ** this.fftSize;
@@ -328,6 +369,8 @@ class BytebeatWorklet extends AudioWorkletProcessor {
                 if (this.wasm && this.wasm.wasm_set_mouse) this.wasm.wasm_set_mouse(msg.mx, msg.my, msg.mv);
             } else if (msg.type === 'imu') {
                 if (this.wasm && this.wasm.wasm_set_imu) this.wasm.wasm_set_imu(msg.ax, msg.ay, msg.az, msg.gx, msg.gy, msg.gz);
+            } else if (msg.type === 'midi') {
+                if (this.wasm && this.wasm.wasm_set_midi) this.wasm.wasm_set_midi(msg.freq, msg.gate, msg.note);
             }
         };
     }
@@ -359,6 +402,180 @@ class BytebeatWorklet extends AudioWorkletProcessor {
 registerProcessor('bytebeat-worklet', BytebeatWorklet);
 `;
 
+/**
+ * Updates the MIDI UI button label and title text based on current inputs and selection.
+ */
+function updateMidiButton() {
+    if (!midiBtn) return;
+    if (midiInputs.length === 0) {
+        midiBtn.innerText = "M: NONE";
+        midiBtn.title = "No MIDI devices found";
+        midiBtn.classList.remove('active');
+        if (midiChanBtn) midiChanBtn.style.display = "none";
+    } else if (currentMidiPortIdx === -2) {
+        midiBtn.innerText = "M: OFF";
+        midiBtn.title = "MIDI Disabled";
+        midiBtn.classList.remove('active');
+        if (midiChanBtn) midiChanBtn.style.display = "none";
+    } else if (currentMidiPortIdx === -1) {
+        midiBtn.innerText = "M: ALL";
+        midiBtn.title = "Listening to all MIDI inputs";
+        midiBtn.classList.add('active');
+        if (midiChanBtn) midiChanBtn.style.display = "inline-flex";
+    } else {
+        midiBtn.innerText = "M: " + currentMidiPortIdx;
+        let name = midiInputs[currentMidiPortIdx].name || "Unknown Device";
+        midiBtn.title = name;
+        midiBtn.classList.add('active');
+        if (midiChanBtn) midiChanBtn.style.display = "inline-flex";
+    }
+}
+
+/**
+ * Updates the MIDI Channel button display.
+ */
+function updateChannelButton() {
+    if (!midiChanBtn) return;
+    midiChanBtn.innerText = currentMidiChannel === -1 ? "C: ALL" : "C: " + (currentMidiChannel + 1);
+    if (currentMidiChannel === -1) {
+        midiChanBtn.classList.add('active');
+    } else {
+        midiChanBtn.classList.remove('active');
+    }
+}
+
+/**
+ * Cycles through available MIDI input ports on the button click and persists the state.
+ * @param e Native UI event block
+ */
+window.cycleMIDI = function(e) {
+    if(e) e.stopPropagation();
+    if (midiInputs.length === 0) return;
+    
+    currentMidiPortIdx++;
+    if (currentMidiPortIdx >= midiInputs.length) {
+        currentMidiPortIdx = -2; 
+    }
+    
+    localStorage.setItem('bytebed_midi_port', currentMidiPortIdx.toString());
+    updateMidiButton();
+};
+
+/**
+ * Cycles through available MIDI channels (ALL or 1-16) on the button click and persists the state.
+ * @param e Native UI event block
+ */
+window.cycleMIDIChannel = function(e) {
+    if(e) e.stopPropagation();
+    currentMidiChannel++;
+    if (currentMidiChannel > 15) {
+        currentMidiChannel = -1; 
+    }
+    
+    localStorage.setItem('bytebed_midi_chan', currentMidiChannel.toString());
+    updateChannelButton();
+};
+
+/**
+ * Queries WASM memory to seamlessly load the C++ hardware default patches.
+ */
+async function loadPreset() {
+    if (!wasm || !wasm.wasm_get_preset_formula) return;
+    
+    const ptr = wasm.wasm_get_preset_formula(currentBank, currentPatch);
+    const view = new Uint8Array(wasm.memory.buffer);
+    let str = ""; 
+    let i = ptr;
+    while (view[i] !== 0) { 
+        str += String.fromCharCode(view[i]); 
+        i++; 
+    }
+    
+    if (str === "") return;
+
+    if (is_playing) {
+        if (!audioBooted) await bootAudio();
+        if (audioCtx && audioCtx.state === 'suspended') await audioCtx.resume();
+        if (workletNode) {
+            workletNode.port.postMessage({ type: 'play', playing: false });
+        }
+    }
+    
+    const rate = wasm.wasm_get_preset_rate(currentBank, currentPatch);
+    const mode = wasm.wasm_get_preset_mode(currentBank, currentPatch);
+
+    formulaInput.value = str;
+    isFloatbeat = (mode === 1);
+    
+    const formatBtn = document.getElementById('format-btn');
+    if (formatBtn) {
+        formatBtn.innerText = isFloatbeat ? "FLOATBEAT" : "BYTEBEAT";
+    }
+
+    targetSampleRate = rate;
+    const foundIdx = rates.indexOf(targetSampleRate);
+    if (foundIdx !== -1) currentRateIdx = foundIdx;
+    const rateBtn = document.getElementById('rate-btn');
+    if (rateBtn) rateBtn.innerText = targetSampleRate + "HZ";
+
+    if (wasm) {
+        if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(mode);
+        if (wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(rate);
+        if (wasm.wasm_reset_vm) wasm.wasm_reset_vm();
+    }
+    
+    if (workletNode) {
+        workletNode.port.postMessage({ type: 'rate', rate: targetSampleRate });
+        workletNode.port.postMessage({ type: 'mode', mode: mode });
+        workletNode.port.postMessage({ type: 'reset' });
+    }
+
+    t_audio = 0; 
+    t_viz = 0;
+    scope.clearCanvas();
+    scope.drawBuffer = [];
+    
+    compile(formulaInput.value);
+
+    autoExpand();
+
+    if (is_playing) {
+        if (playBtn) {
+            playBtn.innerText = "⏸\uFE0E";
+            playBtn.classList.add('active');
+        }
+        if (workletNode) {
+            workletNode.port.postMessage({ type: 'play', playing: true });
+        }
+    }
+}
+
+/**
+ * Steps the active bank forward through 0-9 index bounds.
+ * @param e Native UI event block
+ */
+window.cycleBank = function(e) {
+    if (e) e.stopPropagation();
+    currentBank = (currentBank + 1) % 10;
+    if (bankBtn) bankBtn.innerText = "B: " + currentBank;
+    loadPreset();
+};
+
+/**
+ * Steps the active patch slot forward through 0-9 index bounds.
+ * @param e Native UI event block
+ */
+window.cyclePatch = function(e) {
+    if (e) e.stopPropagation();
+    currentPatch = (currentPatch + 1) % 10;
+    if (patchBtn) patchBtn.innerText = "P: " + currentPatch;
+    loadPreset();
+};
+
+/**
+ * Cycles through the available playback sample rates.
+ * @param e Native UI event block
+ */
 window.cycleRate = function(e) {
     if(e) e.stopPropagation();
     currentRateIdx = (currentRateIdx + 1) % rates.length;
@@ -369,12 +586,14 @@ window.cycleRate = function(e) {
     if (workletNode) workletNode.port.postMessage({ type: 'rate', rate: targetSampleRate });
 };
 
+/**
+ * Toggles the compilation format between classic Bytebeat and Floatbeat.
+ * @param e Native UI event block
+ */
 window.toggleFormat = function(e) {
     if(e) e.stopPropagation();
     isFloatbeat = !isFloatbeat;
     e.target.innerText = isFloatbeat ? "FLOATBEAT" : "BYTEBEAT";
-    if (isFloatbeat) e.target.classList.remove('active');
-    else e.target.classList.add('active');
     
     if (wasm) {
         if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
@@ -390,11 +609,19 @@ window.toggleFormat = function(e) {
 const visModes = ['Waveform', 'Diagram', 'Combined', 'FFT'];
 let currentVisIdx = 0;
 
+/**
+ * Cycles through available scope visualization modes.
+ * @param e Native UI event block
+ */
 window.toggleVis = function(e) {
     if (e) e.stopPropagation();
     setVisMode((currentVisIdx + 1) % visModes.length);
 };
 
+/**
+ * Updates the active visualization rendering mode.
+ * @param idx Index corresponding to the targeted mode in visModes array
+ */
 function setVisMode(idx) {
     currentVisIdx = idx;
     scope.drawMode = visModes[currentVisIdx];
@@ -402,23 +629,38 @@ function setVisMode(idx) {
     scope.clearCanvas();
 }
 
+/**
+ * Increases the timeline scale for zooming in on the canvas representation.
+ * @param e Native UI event block
+ */
 window.zoomIn = function(e) {
     if(e) e.stopPropagation();
     scope.drawScale = Math.max(0, scope.drawScale - 1);
     scope.clearCanvas();
 };
 
+/**
+ * Decreases the timeline scale for zooming out on the canvas representation.
+ * @param e Native UI event block
+ */
 window.zoomOut = function(e) {
     if(e) e.stopPropagation();
     scope.drawScale = Math.min(10, scope.drawScale + 1);
     scope.clearCanvas();
 };
 
+/**
+ * Dynamically updates the textarea sizing relative to its inner content limit.
+ */
 function autoExpand() {
     formulaInput.style.height = 'auto';
     formulaInput.style.height = formulaInput.scrollHeight + 'px';
 }
 
+/**
+ * Serializes formula and system configuration state for browser URL sharing.
+ * @param e Native UI event block
+ */
 function shareCode(e) {
     if(e) e.stopPropagation();
     const safeBase64 = base64UrlEncode(formulaInput.value);
@@ -433,6 +675,10 @@ function shareCode(e) {
     });
 }
 
+/**
+ * Restores shared parameters back from the browser URL address bar state.
+ * @return True if successful load from URL parameter, false otherwise.
+ */
 function checkURLParams() {
     const urlParams = new URLSearchParams(window.location.search);
     const code = urlParams.get('code');
@@ -483,6 +729,11 @@ function checkURLParams() {
     return false;
 }
 
+/**
+ * Invokes the WASM decompiler.
+ * @param toRPN Boolean designating compilation target translation
+ * @return Retained decompiled result text block.
+ */
 function getDecompiledText(toRPN) {
     if (!wasm || !wasm.wasm_decompile) return "";
     const ptr = wasm.wasm_decompile(toRPN);
@@ -492,6 +743,10 @@ function getDecompiledText(toRPN) {
     return str;
 }
 
+/**
+ * Polls error buffer states from internal runtime allocation context tracking.
+ * @return Local cached exception output format string.
+ */
 function getLastError() {
     if (!wasm || !wasm.wasm_get_last_error) return "ERR: Compilation Failed";
     const ptr = wasm.wasm_get_last_error();
@@ -507,6 +762,10 @@ function getLastError() {
     return str;
 }
 
+/**
+ * Handles RPN and INFIX mode toggle switching logic updating compilation target.
+ * @param e Native UI event block.
+ */
 function toggleMode(e) {
     if(e) e.stopPropagation();
     if (!wasm) return;
@@ -520,6 +779,10 @@ function toggleMode(e) {
     }
 }
 
+/**
+ * Marshals native device motion triggers directly into VM parameters variables.
+ * @param event The generic DOM sensor dispatch event structure
+ */
 function handleMotion(event) {
     let local_ax = 0, local_ay = 0, local_az = 0;
     let local_gx = 0, local_gy = 0, local_gz = 0;
@@ -538,6 +801,11 @@ function handleMotion(event) {
     if (workletNode) workletNode.port.postMessage({ type: 'imu', ax: local_ax, ay: local_ay, az: local_az, gx: local_gx, gy: local_gy, gz: local_gz });
 }
 
+/**
+ * Monitors and processes canvas hover input streams to internal engine mapping.
+ * @param clientX X-axis coordinates over the viz box
+ * @param clientY Y-axis coordinates over the viz box
+ */
 function handlePointer(clientX, clientY) {
     const rect = canvasElem.getBoundingClientRect();
     let mx = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
@@ -588,9 +856,15 @@ let wasmReadyPromise = (async function initWASM() {
         canvasElem.width = scope.canvasWidth;
         canvasElem.height = scope.canvasHeight;
         
-        checkURLParams();
-        compile(formulaInput.value);
-        autoExpand();
+        if (!checkURLParams()) {
+            loadPreset(); 
+        } else {
+            compile(formulaInput.value);
+            autoExpand();
+        }
+
+        initMIDI(); 
+        updateChannelButton(); // Ensure channel button UI matches loaded state
         
         requestAnimationFrame(renderLoop);
     } catch (err) {
@@ -598,6 +872,9 @@ let wasmReadyPromise = (async function initWASM() {
     }
 })();
 
+/**
+ * Initializes the root AudioWorklet runtime context safely adhering to browser lock requirements.
+ */
 async function bootAudio() {
     if (audioBooted || isBooting) return;
     isBooting = true;
@@ -649,6 +926,10 @@ async function bootAudio() {
     isBooting = false;
 }
 
+/**
+ * Controls DSP sequence progression start state handling contextual audio suspension triggers.
+ * @param e Native UI event block
+ */
 async function togglePlay(e) {
     if(e) e.stopPropagation();
     
@@ -664,6 +945,10 @@ async function togglePlay(e) {
     }
 }
 
+/**
+ * Resets processing timing sequences completely halting playback streams and memory contexts.
+ * @param e Native UI event block
+ */
 function resetT(e) { 
     if(e) e.stopPropagation(); 
     
@@ -689,6 +974,11 @@ function resetT(e) {
     }
 }
 
+/**
+ * Issues core parsing translation payload over shared WASM memory pointer block structure.
+ * @param str Base target string algorithm representation.
+ * @return True output evaluation compilation validity.
+ */
 function compile(str) {
     if (!wasm) return false;
     const encoder = new TextEncoder();
@@ -721,8 +1011,15 @@ function compile(str) {
     return success;
 }
 
+/**
+ * UI toggle linking state change auto compilation validation events sequence.
+ * @param e Native UI event block
+ */
 function toggleAuto(e) { if(e) e.stopPropagation(); is_auto = !is_auto; autoBtn.classList.toggle('active', is_auto); }
 
+/**
+ * Native framerate bounded GUI draw event polling core dispatch function target loop.
+ */
 function renderLoop() {
     requestAnimationFrame(renderLoop);
     
@@ -764,6 +1061,128 @@ window.addEventListener('keydown', (e) => {
         if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomIn(); }
         if (e.key === "-") { e.preventDefault(); zoomOut(); }
     }
+
+    if (e.code.startsWith('F') && e.code.length <= 3) {
+        let fNum = parseInt(e.code.substring(1), 10);
+        if (fNum >= 1 && fNum <= 10) {
+            e.preventDefault(); 
+            currentBank = fNum === 10 ? 0 : fNum; 
+            if (bankBtn) bankBtn.innerText = "B: " + currentBank;
+            loadPreset();
+            return;
+        }
+    }
+
+    if (e.code && e.code.startsWith('Digit')) {
+        let num = parseInt(e.code.replace('Digit', ''), 10);
+        if (!isNaN(num)) {
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
+                e.preventDefault();
+                currentPatch = num;
+                if (patchBtn) patchBtn.innerText = "P: " + currentPatch;
+                loadPreset();
+            }
+        }
+    }
 });
 
 formulaInput.addEventListener('input', (e) => { autoExpand(); if (wasm && is_auto) compile(e.target.value); });
+
+/**
+ * Refreshes the internal MIDI input device array list tracking available hardware blocks.
+ * @param midiAccess Web MIDI API native dispatch structure reference instance object
+ */
+function refreshMidiInputs(midiAccess) {
+    midiInputs = Array.from(midiAccess.inputs.values());
+    
+    // Bounds check the loaded state against physically available devices
+    if (currentMidiPortIdx >= midiInputs.length) {
+        currentMidiPortIdx = -1;
+        localStorage.setItem('bytebed_midi_port', '-1');
+    }
+    
+    updateMidiButton();
+}
+
+/**
+ * Handles clearing MIDI gate thresholds upon note release triggering.
+ * @param note The absolute target standard MIDI note number
+ */
+function handleNoteOff(note) {
+    const released_freq = 440.0 * Math.pow(2.0, (note - 69) / 12.0);
+    if (Math.abs(current_midi_freq - released_freq) < 0.1) {
+        if (wasm && wasm.wasm_set_midi) wasm.wasm_set_midi(current_midi_freq, 0.0, note);
+        if (workletNode) workletNode.port.postMessage({ type: 'midi', freq: current_midi_freq, gate: 0.0, note: note });
+    }
+}
+
+/**
+ * Generic MIDI stream parser routing standard note messages to WebAssembly virtual machines.
+ * @param message DOM element referencing natively bounded hardware IO streams structure
+ */
+function onMIDIMessage(message) {
+    if (currentMidiPortIdx === -2) return;
+
+    const status = message.data[0];
+    const command = status & 0xf0;
+    const channel = status & 0x0f;
+
+    if (currentMidiChannel !== -1 && channel !== currentMidiChannel) {
+        return;
+    }
+
+    if (currentMidiPortIdx !== -1) {
+        const targetInput = midiInputs[currentMidiPortIdx];
+        if (message.currentTarget !== targetInput && message.target !== targetInput) {
+            return;
+        }
+    }
+
+    const note = message.data[1];
+    const velocity = (message.data.length > 2) ? message.data[2] : 0;
+
+    if (command === 144) { 
+        if (velocity > 0) {
+            current_midi_note = note;
+            current_midi_freq = 440.0 * Math.pow(2.0, (note - 69) / 12.0);
+            const gate = velocity / 127.0;
+            
+            if (wasm && wasm.wasm_set_midi) wasm.wasm_set_midi(current_midi_freq, gate, note);
+            if (workletNode) workletNode.port.postMessage({ type: 'midi', freq: current_midi_freq, gate: gate, note: note });
+        } else {
+            handleNoteOff(note);
+        }
+    } else if (command === 128) { 
+        handleNoteOff(note);
+    }
+}
+
+/**
+ * Starts standard context initialization connecting physical system MIDI controllers.
+ */
+function initMIDI() {
+    if (navigator.requestMIDIAccess) {
+        navigator.requestMIDIAccess().then(
+            (midiAccess) => {
+                refreshMidiInputs(midiAccess);
+                for (let input of midiInputs) {
+                    input.onmidimessage = onMIDIMessage;
+                }
+                midiAccess.onstatechange = (e) => {
+                    refreshMidiInputs(midiAccess);
+                    if (e.port.type === 'input' && e.port.state === 'connected') {
+                        e.port.onmidimessage = onMIDIMessage;
+                    }
+                };
+                console.log("Web MIDI initialized");
+            },
+            (err) => {
+                console.log("MIDI access failed: ", err);
+                updateMidiButton();
+            }
+        );
+    } else {
+        console.log("Web MIDI API not supported in this browser.");
+        updateMidiButton();
+    }
+}
