@@ -265,8 +265,8 @@
                 <span id="rate-btn" class="btn" title="Sample rate" onclick="cycleRate(event)">8000HZ</span>
                 <span id="format-btn" class="btn" title="Bytebeat mode" onclick="toggleFormat(event)">BYTEBEAT</span>
 
-                <span id="bank-btn" class="btn" title="Bank" onclick="cycleBank(event)">B: 1</span>
-                <span id="patch-btn" class="btn" title="Patch" onclick="cyclePatch(event)">P: 0</span>
+                <span id="bank-btn" class="btn" title="Bank" onclick="cycleBank(event)">BANK: 1</span>
+                <span id="patch-btn" class="btn" title="Patch" onclick="cyclePatch(event)">PATCH: 0</span>
                 
                 <span id="vis-btn" class="btn" title="Visualization mode" onclick="toggleVis(event)">WAVEFORM</span>
                 <span class="btn btn-icon" title="Zoom in" onclick="zoomIn(event)">＋&#xFE0E;</span>
@@ -293,7 +293,7 @@
             <span class="modal-close" id="close-help">&times;</span>
             <h2>BYTEBED</h2>
             <p class="desc">Bytebeat bytecode virtual machine written in C++ for M5Stack Cardputers. This is the WASM version suitable for testing and sharing patches online. Source and binaries in <a href="https://github.com/amiika/bytebed" class="inline-link" target="_blank">Github</a>.</p>
-            
+            <p class="desc">Use Bank and Patch buttons to browse examples. Toggle between different visualizations: + and - adjusts refresh rate. INFIX / TAB key changes between infix and postfix notation. Toggle AUTO to evaluate with enter or automatically on change.</p>
             <div class="modal-section">
                 <h3>MORE INFO</h3>
                 <a href="bytebed.html" class="btn" target="_blank" style="margin-top: 5px;">Bytebed information</a>

@@ -1056,34 +1056,6 @@ window.addEventListener('keydown', (e) => {
         if (!is_playing) togglePlay();
     }
     if (e.key === "Escape") togglePlay();
-    
-    if (e.ctrlKey || e.metaKey) {
-        if (e.key === "=" || e.key === "+") { e.preventDefault(); zoomIn(); }
-        if (e.key === "-") { e.preventDefault(); zoomOut(); }
-    }
-
-    if (e.code.startsWith('F') && e.code.length <= 3) {
-        let fNum = parseInt(e.code.substring(1), 10);
-        if (fNum >= 1 && fNum <= 10) {
-            e.preventDefault(); 
-            currentBank = fNum === 10 ? 0 : fNum; 
-            if (bankBtn) bankBtn.innerText = "B: " + currentBank;
-            loadPreset();
-            return;
-        }
-    }
-
-    if (e.code && e.code.startsWith('Digit')) {
-        let num = parseInt(e.code.replace('Digit', ''), 10);
-        if (!isNaN(num)) {
-            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey) {
-                e.preventDefault();
-                currentPatch = num;
-                if (patchBtn) patchBtn.innerText = "P: " + currentPatch;
-                loadPreset();
-            }
-        }
-    }
 });
 
 formulaInput.addEventListener('input', (e) => { autoExpand(); if (wasm && is_auto) compile(e.target.value); });
