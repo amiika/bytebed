@@ -49,7 +49,7 @@ const PresetConfig defaultBanks[10][10] = {
     {
         {"g=(n)=>{n<1?1:n%2<1?g(n/2):2*g(n/2)}; g(t>>7)*(t&128|t>>4)", 8000, MODE_BYTEBEAT}, 
         {"tm=(n)=>{n<1?0:n%2<1?tm(n/2):1-tm(n/2)}; t*tm(t>>11)*(t>>5&7)", 8000, MODE_BYTEBEAT},
-        {"fib=(n)=>{n<2?1:fib(n-1)+fib(n-2)}; t*fib((t>>11)%7+3)", 8000, MODE_BYTEBEAT},
+        {"pat=(s,o,r)=>(c=s[t>>r],c?30&t*2**((c-1)/12-o):0),3*pat('10100030305006008034660000gfbx',2,10)+5*(t&4096?pat('148',0,8)*(4096-(t&4095))>>12:0)", 8000, MODE_BYTEBEAT},
         {"env=(t>>12)%4; env<1?t*3:env<2?t*5:env<3?t*6:t*9", 8000, MODE_BYTEBEAT},
         {"f=(x,dt)=>{x*(t>>dt)};f(t,5)+f(t,7)", 8000, MODE_BYTEBEAT},
         {"v=t>>3,v^=t>>(t>>8),(v&3)?t>>5:t&(t>>4)", 22050, MODE_BYTEBEAT},
