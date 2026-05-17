@@ -557,7 +557,7 @@ async function loadPreset() {
 window.cycleBank = function(e) {
     if (e) e.stopPropagation();
     currentBank = (currentBank + 1) % 10;
-    if (bankBtn) bankBtn.innerText = "B: " + currentBank;
+    if (bankBtn) bankBtn.innerText = "BANK: " + currentBank;
     loadPreset();
 };
 
@@ -568,7 +568,7 @@ window.cycleBank = function(e) {
 window.cyclePatch = function(e) {
     if (e) e.stopPropagation();
     currentPatch = (currentPatch + 1) % 10;
-    if (patchBtn) patchBtn.innerText = "P: " + currentPatch;
+    if (patchBtn) patchBtn.innerText = "PATCH: " + currentPatch;
     loadPreset();
 };
 
