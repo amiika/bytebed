@@ -132,7 +132,7 @@ String runBytebeatTestSuite() {
         {"m = [10, 20]; m[0] + m[1]", 0, 30, false, false},
         {"v += (sin(t * 0.1) - p - v * 3) / 200, p += v, p * 100", 1000, 104, false, false},
 
-        // --- 9. SMART STRINGS ---
+        // --- 9. STRING TABLE & BASE62 ---
         {"'1112'[3]",            0,  2, false, true}, 
         {"'5'[0]",               0,  5, false, true}, 
         {"'abc'[0]",             0,  10, false, true}, 
@@ -144,6 +144,14 @@ String runBytebeatTestSuite() {
         {"'5'[0] * 10",          0,  50, false, true}, 
         {"'a'[0] + 97",          0,   107, false, true},
         {"'1112' 3 @",           0,  2, true,  true}, 
+        {"'aA0'[0]",             0, 10, false, true},
+        {"'aA0'[1]",             0, 36, false, true},
+        {"'aA0'[2]",             0,  0, false, true},
+        {"'Z'[0]",               0, 61, false, true},
+        {"[10, 20, 30]['c'[0] - 10]", 0, 30, false, true},
+        
+        {"t*[0,8/9,1,9/8,6/5,4/3,3/2]['1242660660555555123155055044444412424405503333332211555555444444'[t>>10]]*4", 1025, 4, false, true},
+        {"t*[0,8/9,1,9/8,6/5,4/3,3/2]['1242660660555555123155055044444412424405503333332211555555444444'[t>>10]]*4", 2048, 102, false, true},
 
         // --- 10. MULTIDIMENSIONAL & NESTED ---
         {"[[10,20],[30,40]][1][0]", 0, 30, false, true}, 

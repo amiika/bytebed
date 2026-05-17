@@ -126,6 +126,11 @@ String decompileRPN() {
                     out += getVarName(inst.val) + " := ";
                 }
                 break;
+            case OP_LOAD_STR:
+                if (inst.val >= 0 && inst.val < string_table_count) {
+                    out += "'" + string_table[inst.val] + "' ";
+                }
+                break;
             case OP_ADD_ASSIGN: out += getVarName(inst.val) + " += "; break;
             case OP_SUB_ASSIGN: out += getVarName(inst.val) + " -= "; break;
             case OP_MUL_ASSIGN: out += getVarName(inst.val) + " *= "; break;
@@ -259,6 +264,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         if (inst.op == OP_VAL) {
             if (sp < MAX_STACK - 1) { 
                 float v = getF(inst.val);
+                if (pc + 1 < end_pc && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
                 if (v == (int32_t)v) {
                     stack[++sp] = String((int32_t)v);
                 } else {
@@ -272,6 +278,16 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         }
         else if (inst.op == OP_LOAD) {
             if (sp < MAX_STACK - 1) { stack[++sp] = getVarName(inst.val); prec_stack[sp] = PREC_MAX; }
+        }
+        else if (inst.op == OP_LOAD_STR) {
+            if (sp < MAX_STACK - 1) { 
+                if (inst.val >= 0 && inst.val < string_table_count) {
+                    stack[++sp] = "'" + string_table[inst.val] + "'"; 
+                } else {
+                    stack[++sp] = "''";
+                }
+                prec_stack[sp] = PREC_MAX; 
+            }
         }
         else if (inst.op == OP_RAND) {
             if (sp < MAX_STACK - 1) { stack[++sp] = getOpSym(inst.op) + "()"; prec_stack[sp] = PREC_MAX; }
@@ -306,7 +322,6 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (sp < MAX_STACK - 1) { stack[++sp] = base + "[" + idx + "]=" + val; prec_stack[sp] = PREC_ASSIGN; }
         }
         
-        // --- STACK COMBINATOR RECONSTRUCTION ---
         else if (inst.op == OP_DUP && sp >= 0) {
             String val = stack[sp];
             int p = prec_stack[sp];
@@ -331,7 +346,6 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             int p = prec_stack[sp-1];
             if (sp < MAX_STACK - 1) { stack[++sp] = val; prec_stack[sp] = p; }
         }
-        // ----------------------------------------
         
         else if (inst.op == OP_POP && sp >= 0) {
             String val = stack[sp]; sp--;

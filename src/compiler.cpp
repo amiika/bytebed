@@ -207,18 +207,20 @@ bool compileInfix(String input, bool reset_t) {
         else if (*p == '\'' || *p == '"') {
             char quote_type = *p;
             if (expect_op) P_ERR("ERR: STR", "Compile Error: Expected operator before string literal");
-            p++; int count = 0;
+            p++; 
+            String extracted = "";
             while (*p && *p != quote_type) { 
-                char c = *p; float val;
-                if (c >= '0' && c <= '9') val = c - '0';
-                else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
-                else if (c >= 'A' && c <= 'Z') val = c - 'A' + 10;
-                else if (c == '-' || c == ' ') val = 0.0f;
-                else val = c;
-                program_bank[target][len++] = {OP_VAL, setF(val)}; count++; p++; 
+                extracted += *p;
+                p++; 
             }
             if (*p == quote_type) p++;
-            program_bank[target][len++] = {OP_VAL, setF((float)count)}; program_bank[target][len++] = {OP_VEC, 1}; 
+            
+            int str_id = string_table_count;
+            if (string_table_count < 64) {
+                string_table[string_table_count++] = extracted;
+            } else { str_id = 63; }
+            
+            program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
             expect_op = true;
         }
         else if (*p == '$' && *(p+1) == '[') {
@@ -590,17 +592,12 @@ bool compileRPN(String input) {
             } else P_ERR("ERR: =", "RPN Error: Invalid assignment target");
         }
         else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\""))) {
-            int count = 0;
-            for (size_t k = 1; k < s.length() - 1; k++) {
-                char c = s[k]; float val;
-                if (c >= '0' && c <= '9') val = c - '0';
-                else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
-                else if (c >= 'A' && c <= 'Z') val = c - 'A' + 10;
-                else if (c == '-' || c == ' ') val = 0.0f;
-                else val = c;
-                program_bank[target][len++] = {OP_VAL, setF(val)}; count++;
-            }
-            program_bank[target][len++] = {OP_VAL, setF((float)count)}; program_bank[target][len++] = {OP_VEC, 0}; 
+            String extracted = s.substring(1, s.length() - 1);
+            int str_id = string_table_count;
+            if (string_table_count < 64) {
+                string_table[string_table_count++] = extracted;
+            } else { str_id = 63; }
+            program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
         }
         else if (parsing_params) { if (cp_cnt < 8) current_params[cp_cnt++] = getVarId(s); }
         else {
@@ -663,6 +660,7 @@ bool compileRPN(String input) {
  */
 void initCompilerState() {
     clear_global_array(); 
+    string_table_count = 0; 
     var_count = 0; 
     memset(vars, 0, sizeof(vars)); 
     
@@ -849,7 +847,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
             if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_LOOP_PREP || op == OP_SWAP || op == OP_OVER) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON || op == OP_ROT) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP) consumes = 1;
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP || op == OP_LOAD_STR) consumes = 1;
             else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;

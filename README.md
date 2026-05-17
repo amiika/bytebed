@@ -79,14 +79,6 @@ See banks 6-8 for examples using midi in.
 
 Pitch bend is also supported using **mf** and fixed to range between -2 to 2 semitones to support pitch bend tuning.
 
-## Screen sharing
-
-Bytebed supports two "screensharing" options that can be used to share your tiny screen using wifi captive portal or by using cardputer as bluetooth keyboard and use WASM version. These are hacky implementations for sharing the screen when performing live with cardputer.  
-
-+ fn + w: Wifi sync
-
-Use captive portal via WIFI to share the screen locally. Captive portal appears as "BYTEBED" in your wifi connections. You can also close captive portal and connect to bytebeat.local when connected to the wifi.
-
 # Installation
 
 Compile & Upload using Platform.io or by using [M5Burner](https://docs.m5stack.com/en/uiflow/m5burner/intro) (Search for Bytebed). Latest firmware also available in Firmware folder.
@@ -106,8 +98,6 @@ Use platform.io and see platform.ini for configuration.
 To compile to wasm and wasm binary header file, run this in wasm folder:
 
 emcc ../src/state.cpp ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cpp wasm_wrapper.cpp -I. -I../include -I../src -s EXPORTED_FUNCTIONS="['_main', '_get_input_buffer', '_wasm_compile', '_wasm_execute', '_wasm_decompile', '_wasm_set_sample_rate', '_wasm_set_play_mode', '_wasm_set_midi', '_wasm_set_imu', '_wasm_set_mouse', '_wasm_reset_vm', '_wasm_get_last_error', '_wasm_get_preset_formula', '_wasm_get_preset_rate', '_wasm_get_preset_mode']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o bytebed.wasm
-
-xxd -i bytebed.wasm | sed 's/unsigned char/const unsigned char/g' > ../include/wasm_binary.h
 
 ## TESTS
 

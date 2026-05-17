@@ -52,6 +52,9 @@ Val vars[64];
 String symNames[64];
 int var_count = 0;
 
+String string_table[64];
+int string_table_count = 0;
+
 float* global_array_mem = nullptr;
 int32_t global_array_capacity = 0;
 
@@ -77,7 +80,7 @@ struct LoopState {
     float i;        
     int saved_sp;   
     Val iterable;   
-    float current_val; 
+    Val current_val; 
 };
 static LoopState loop_stack[32];
 int loop_sp = -1;
@@ -95,6 +98,24 @@ inline bool is_vec_tag(float f) {
 }
 
 inline int32_t decode_vec(float f) { 
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    return (int32_t)(u.i & 0x07FFFFFF); 
+}
+
+inline float encode_str(int32_t v) { 
+    union { float f; uint32_t i; } u;
+    u.i = 0x70000000 | (v & 0x07FFFFFF); 
+    return u.f; 
+}
+
+inline bool is_str_tag(float f) { 
+    union { float f; uint32_t i; } u;
+    u.f = f;
+    return (u.i & 0xF8000000) == 0x70000000; 
+}
+
+inline int32_t decode_str(float f) { 
     union { float f; uint32_t i; } u;
     u.f = f;
     return (int32_t)(u.i & 0x07FFFFFF); 
@@ -214,6 +235,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         &&L_OP_RAND, &&L_OP_INT,
         &&L_OP_DUP, &&L_OP_SWAP, &&L_OP_ROT, &&L_OP_OVER,
         &&L_OP_LOOP_PREP, &&L_OP_LOOP_EVAL, &&L_OP_LOOP_DONE,
+        &&L_OP_LOAD_STR,
         &&L_DEFAULT
     };
 
@@ -226,24 +248,25 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         local_array_ptr = 0; int sp = -1; int csp = -1; int ssp = -1; loop_sp = -1; 
         Val tos = {0, 0}; 
 
-        int pc = 0; Instruction inst = prog[pc]; goto *dispatch_table[inst.op];
-        #define BOING() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[inst.op]; } while(0)
+        int pc = 0; Instruction inst = prog[pc]; goto *dispatch_table[(uint8_t)inst.op];
+        #define BOING() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[(uint8_t)inst.op]; } while(0)
 
         L_OP_VAL: if (sp < 511) vm_stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BOING();
         L_OP_T:   if (sp < 511) vm_stack[++sp] = tos; tos.type = 0; tos.f = (float)t; BOING();
         L_OP_LOAD: if (sp < 511) vm_stack[++sp] = tos; tos = vars[inst.val]; BOING();
-        L_OP_STORE: vars[inst.val] = tos; tos = vm_stack[sp--]; BOING();
+        L_OP_LOAD_STR: if (sp < 511) vm_stack[++sp] = tos; tos.type = 4; tos.v = inst.val; BOING(); 
+        L_OP_STORE: vars[inst.val] = tos; tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; BOING();
         L_OP_STORE_KEEP: vars[inst.val] = tos; BOING();
-        L_OP_POP: tos = vm_stack[sp--]; BOING();
+        L_OP_POP: tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; BOING();
         L_OP_JMP: pc += inst.val - 1; BOING(); 
         L_OP_PUSH_FUNC: if (sp < 511) vm_stack[++sp] = tos; tos.type = 1; tos.v = pc + 1; pc += inst.val - 1; BOING(); 
         L_OP_ASSIGN_VAR: BOING();
         L_OP_DYN_CALL:
         L_OP_DYN_CALL_IF_FUNC:
-            if (tos.type == 1) { if (csp < 511) { vm_call_stack[++csp] = pc; pc = tos.v - 1; } tos = vm_stack[sp--]; } 
+            if (tos.type == 1) { if (csp < 511) { vm_call_stack[++csp] = pc; pc = tos.v - 1; } tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; } 
             else if (inst.op == OP_DYN_CALL) { int args = inst.val; sp -= args; tos = {0, 0}; } BOING();
         L_OP_RET: if (csp >= 0) pc = vm_call_stack[csp--]; else pc = len; BOING();
-        L_OP_BIND: if (ssp < 511) vm_shadow_val[++ssp] = vars[inst.val]; vars[inst.val] = tos; tos = vm_stack[sp--]; BOING();
+        L_OP_BIND: if (ssp < 511) vm_shadow_val[++ssp] = vars[inst.val]; vars[inst.val] = tos; tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; BOING();
         L_OP_UNBIND: if (ssp >= 0) vars[inst.val] = vm_shadow_val[ssp--]; BOING();
         
         L_OP_VEC: {
@@ -253,7 +276,9 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                 for (int i = 0; i < size; i++) {
                     if (local_array_ptr < MAX_LOCAL_ARRAY) {
                         Val& item = vm_stack[start_idx + i];
-                        local_array_mem[local_array_ptr++] = (item.type == 2) ? encode_vec(item.v) : item.f;
+                        if (item.type == 2) local_array_mem[local_array_ptr++] = encode_vec(item.v);
+                        else if (item.type == 4) local_array_mem[local_array_ptr++] = encode_str(item.v);
+                        else local_array_mem[local_array_ptr++] = item.f;
                     }
                 }
                 sp -= size; tos.type = 2; tos.v = (offset << 16) | (size & 0xFFFF); 
@@ -266,36 +291,60 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
         L_OP_AT: {
             int32_t idx = (int32_t)tos.f;
-            Val base = vm_stack[sp--];
+            Val base = (sp >= 0) ? vm_stack[sp--] : Val{0, 0};
             if (base.type == 2) { 
                 int32_t m = base.v; int off = m >> 16, sz = m & 0xFFFF;
                 if (sz > 0) { if (idx < 0 || idx >= sz) idx = ((idx % sz) + sz) % sz; }
                 float raw = (off + idx < MAX_LOCAL_ARRAY) ? local_array_mem[off + idx] : 0.0f;
                 if (is_vec_tag(raw)) { tos.type = 2; tos.v = decode_vec(raw); }
+                else if (is_str_tag(raw)) { tos.type = 4; tos.v = decode_str(raw); }
                 else { tos.type = 0; tos.f = sanitize(raw); }
             } else if (base.type == 3 && global_array_capacity > 0) { 
                 if (idx < 0 || idx >= global_array_capacity) idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity; 
-                tos.type = 0; tos.f = sanitize(global_array_mem[idx]);
+                float raw = global_array_mem[idx];
+                if (is_vec_tag(raw)) { tos.type = 2; tos.v = decode_vec(raw); }
+                else if (is_str_tag(raw)) { tos.type = 4; tos.v = decode_str(raw); }
+                else { tos.type = 0; tos.f = sanitize(raw); }
+            } else if (base.type == 4) { 
+                if (base.v >= 0 && base.v < string_table_count) {
+                    String str = string_table[base.v];
+                    int sz = str.length();
+                    if (sz > 0) {
+                        if (idx < 0 || idx >= sz) idx = ((idx % sz) + sz) % sz;
+                        char c = str[idx];
+                        float val = 0.0f;
+                        if (c >= '0' && c <= '9') val = c - '0';
+                        else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
+                        else if (c >= 'A' && c <= 'Z') val = c - 'A' + 36;
+                        tos.type = 0; tos.f = val;
+                    } else { tos = {0, 0}; }
+                } else { tos = {0, 0}; }
             } else { tos = {0, 0}; } 
             BOING();
         }
         L_OP_STORE_AT: {
             Val val_to_s = tos; 
-            int32_t idx = (int32_t)vm_stack[sp--].f; 
-            Val base = vm_stack[sp--];
+            int32_t idx = (sp >= 0) ? (int32_t)vm_stack[sp--].f : 0; 
+            Val base = (sp >= 0) ? vm_stack[sp--] : Val{0,0};
             if (base.type == 2) { 
                 int32_t m = base.v; int off = m >> 16, sz = m & 0xFFFF;
                 if (sz > 0) { if (idx < 0 || idx >= sz) idx = ((idx % sz) + sz) % sz; }
-                if (off + idx < MAX_LOCAL_ARRAY) local_array_mem[off + idx] = (val_to_s.type == 2) ? encode_vec(val_to_s.v) : sanitize(val_to_s.f);
+                if (off + idx < MAX_LOCAL_ARRAY) {
+                    if (val_to_s.type == 2) local_array_mem[off + idx] = encode_vec(val_to_s.v);
+                    else if (val_to_s.type == 4) local_array_mem[off + idx] = encode_str(val_to_s.v);
+                    else local_array_mem[off + idx] = sanitize(val_to_s.f);
+                }
             } else if (base.type == 3 && global_array_capacity > 0) { 
                 if (idx < 0 || idx >= global_array_capacity) idx = ((idx % global_array_capacity) + global_array_capacity) % global_array_capacity;
-                global_array_mem[idx] = sanitize(val_to_s.f); 
+                if (val_to_s.type == 2) global_array_mem[idx] = encode_vec(val_to_s.v);
+                else if (val_to_s.type == 4) global_array_mem[idx] = encode_str(val_to_s.v);
+                else global_array_mem[idx] = sanitize(val_to_s.f); 
             }
             tos = val_to_s; 
             BOING();
         }
-        L_OP_SC_AND: { if (inst.val != 0) { if (tos.f == 0.0f) pc += inst.val - 1; else tos = vm_stack[sp--]; } else { if (vm_stack[sp].f == 0.0f) tos = vm_stack[sp--]; else sp--; } BOING(); }
-        L_OP_SC_OR: { if (inst.val != 0) { if (tos.f != 0.0f) pc += inst.val - 1; else tos = vm_stack[sp--]; } else { if (vm_stack[sp].f != 0.0f) tos = vm_stack[sp--]; else sp--; } BOING(); }
+        L_OP_SC_AND: { if (inst.val != 0) { if (tos.f == 0.0f) pc += inst.val - 1; else tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; } else { if (sp >= 0 && vm_stack[sp].f == 0.0f) tos = vm_stack[sp--]; else sp--; } BOING(); }
+        L_OP_SC_OR: { if (inst.val != 0) { if (tos.f != 0.0f) pc += inst.val - 1; else tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; } else { if (sp >= 0 && vm_stack[sp].f != 0.0f) tos = vm_stack[sp--]; else sp--; } BOING(); }
         L_OP_NEG: tos.f = -tos.f; BOING();
         L_OP_NOT: tos.f = (tos.f == 0.0f) ? 1.0f : 0.0f; BOING();
         L_OP_BNOT: tos.f = (float)(~(int32_t)tos.f); BOING();
@@ -315,29 +364,29 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         L_OP_ASIN:  tos.f = asinf(tos.f); BOING();
         L_OP_ACOS:  tos.f = acosf(tos.f); BOING();
         L_OP_ATAN:  tos.f = atanf(tos.f); BOING();
-        L_OP_COND: { Val f = tos, tv = vm_stack[sp--], c = vm_stack[sp--]; Val tgt = (c.f != 0.0f) ? tv : f; if (tgt.type == 1) { if (csp < 511) { vm_call_stack[++csp] = pc; pc = tgt.v - 1; } tos = vm_stack[sp--]; } else { tos = tgt; } BOING(); }
+        L_OP_COND: { Val f = tos, tv = (sp >= 0) ? vm_stack[sp--] : Val{0,0}, c = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; Val tgt = (c.f != 0.0f) ? tv : f; if (tgt.type == 1) { if (csp < 511) { vm_call_stack[++csp] = pc; pc = tgt.v - 1; } tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; } else { tos = tgt; } BOING(); }
         
-        L_OP_ADD: tos.f = vm_stack[sp].f + tos.f; sp--; BOING();
-        L_OP_SUB: tos.f = vm_stack[sp].f - tos.f; sp--; BOING();
-        L_OP_MUL: tos.f = vm_stack[sp].f * tos.f; sp--; BOING();
-        L_OP_DIV: { float d = tos.f; tos.f = (d != 0.0f ? sanitize(vm_stack[sp].f / d) : 0.0f); sp--; BOING(); }
-        L_OP_MOD: { float n = vm_stack[sp].f, d = tos.f; tos.f = (d != 0.0f ? sanitize(n - (int32_t)(n / d) * d) : 0.0f); sp--; BOING(); }
+        L_OP_ADD: tos.f = (sp >= 0 ? vm_stack[sp].f : 0.0f) + tos.f; sp--; BOING();
+        L_OP_SUB: tos.f = (sp >= 0 ? vm_stack[sp].f : 0.0f) - tos.f; sp--; BOING();
+        L_OP_MUL: tos.f = (sp >= 0 ? vm_stack[sp].f : 0.0f) * tos.f; sp--; BOING();
+        L_OP_DIV: { float d = tos.f; tos.f = (d != 0.0f ? sanitize((sp >= 0 ? vm_stack[sp].f : 0.0f) / d) : 0.0f); sp--; BOING(); }
+        L_OP_MOD: { float n = (sp >= 0 ? vm_stack[sp].f : 0.0f), d = tos.f; tos.f = (d != 0.0f ? sanitize(n - (int32_t)(n / d) * d) : 0.0f); sp--; BOING(); }
         
-        L_OP_AND: tos.f = (float)((int32_t)vm_stack[sp].f & (int32_t)tos.f); sp--; BOING();
-        L_OP_OR:  tos.f = (float)((int32_t)vm_stack[sp].f | (int32_t)tos.f); sp--; BOING();
-        L_OP_XOR: tos.f = (float)((int32_t)vm_stack[sp].f ^ (int32_t)tos.f); sp--; BOING();
-        L_OP_SHL: tos.f = (float)((int32_t)vm_stack[sp].f << (int32_t)tos.f); sp--; BOING();
-        L_OP_SHR: tos.f = (float)((int32_t)vm_stack[sp].f >> (int32_t)tos.f); sp--; BOING();
+        L_OP_AND: tos.f = (float)((int32_t)(sp >= 0 ? vm_stack[sp].f : 0.0f) & (int32_t)tos.f); sp--; BOING();
+        L_OP_OR:  tos.f = (float)((int32_t)(sp >= 0 ? vm_stack[sp].f : 0.0f) | (int32_t)tos.f); sp--; BOING();
+        L_OP_XOR: tos.f = (float)((int32_t)(sp >= 0 ? vm_stack[sp].f : 0.0f) ^ (int32_t)tos.f); sp--; BOING();
+        L_OP_SHL: tos.f = (float)((int32_t)(sp >= 0 ? vm_stack[sp].f : 0.0f) << (int32_t)tos.f); sp--; BOING();
+        L_OP_SHR: tos.f = (float)((int32_t)(sp >= 0 ? vm_stack[sp].f : 0.0f) >> (int32_t)tos.f); sp--; BOING();
         
-        L_OP_LT:  tos.f = (vm_stack[sp].f < tos.f) ? 1.0f : 0.0f; sp--; BOING();
-        L_OP_GT:  tos.f = (vm_stack[sp].f > tos.f) ? 1.0f : 0.0f; sp--; BOING();
-        L_OP_EQ:  tos.f = (vm_stack[sp].f == tos.f) ? 1.0f : 0.0f; sp--; BOING();
-        L_OP_NEQ: tos.f = (vm_stack[sp].f != tos.f) ? 1.0f : 0.0f; sp--; BOING();
-        L_OP_LTE: tos.f = (vm_stack[sp].f <= tos.f) ? 1.0f : 0.0f; sp--; BOING();
-        L_OP_GTE: tos.f = (vm_stack[sp].f >= tos.f) ? 1.0f : 0.0f; sp--; BOING();
-        L_OP_MIN: { float a = vm_stack[sp].f, b = tos.f; tos.f = (a < b ? a : b); sp--; BOING(); }
-        L_OP_MAX: { float a = vm_stack[sp].f, b = tos.f; tos.f = (a > b ? a : b); sp--; BOING(); }
-        L_OP_POW: tos.f = fast_pow(vm_stack[sp].f, tos.f); sp--; BOING();
+        L_OP_LT:  tos.f = ((sp >= 0 ? vm_stack[sp].f : 0.0f) < tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_GT:  tos.f = ((sp >= 0 ? vm_stack[sp].f : 0.0f) > tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_EQ:  tos.f = ((sp >= 0 ? vm_stack[sp].f : 0.0f) == tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_NEQ: tos.f = ((sp >= 0 ? vm_stack[sp].f : 0.0f) != tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_LTE: tos.f = ((sp >= 0 ? vm_stack[sp].f : 0.0f) <= tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_GTE: tos.f = ((sp >= 0 ? vm_stack[sp].f : 0.0f) >= tos.f) ? 1.0f : 0.0f; sp--; BOING();
+        L_OP_MIN: { float a = (sp >= 0 ? vm_stack[sp].f : 0.0f), b = tos.f; tos.f = (a < b ? a : b); sp--; BOING(); }
+        L_OP_MAX: { float a = (sp >= 0 ? vm_stack[sp].f : 0.0f), b = tos.f; tos.f = (a > b ? a : b); sp--; BOING(); }
+        L_OP_POW: tos.f = fast_pow((sp >= 0 ? vm_stack[sp].f : 0.0f), tos.f); sp--; BOING();
 
         L_OP_ADD_ASSIGN: { float r = vars[inst.val].f + tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
         L_OP_SUB_ASSIGN: { float r = vars[inst.val].f - tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
@@ -399,12 +448,17 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
 
         L_OP_LOOP_PREP: {
-            int ltype = inst.val; Val func = tos; Val iter = vm_stack[sp--];
+            int ltype = inst.val; Val func = tos; Val iter = (sp >= 0) ? vm_stack[sp--] : Val{0,0};
             float limit = 0.0f; Val iterable = {0, 0};
             if (iter.type == 2) { iterable = iter; limit = (float)(iter.v & 0xFFFF); } 
             else if (iter.type == 3) { iterable = iter; limit = iter.f; } 
+            else if (iter.type == 4) { iterable = iter; limit = (float)string_table[iter.v].length(); } 
             else { limit = iter.f; }
-            if (loop_sp < 31) { loop_stack[++loop_sp] = {ltype, 0.0f, limit, (int)func.v, 0.0f, sp, iterable, 0.0f}; }
+            
+            Val empty_val; 
+            empty_val.type = 0; 
+            empty_val.f = 0.0f;
+            if (loop_sp < 31) { loop_stack[++loop_sp] = {ltype, 0.0f, limit, (int)func.v, 0.0f, sp, iterable, empty_val}; }
             tos.type = 0; tos.f = 0.0f; BOING();
         }
         
@@ -416,19 +470,44 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                     else { tos.type = 0; tos.f = (s.type == 4) ? s.acc : s.limit; loop_sp--; pc += inst.val - 1; goto L_OP_VEC; }
                 } else {
                     s.saved_sp = sp; if (csp < 511) { vm_call_stack[++csp] = pc; pc = s.f_pc - 1; }
-                    float val = s.i; 
+                    
+                    Val item_val;
+                    item_val.type = 0;
+                    item_val.f = s.i;
+                    
                     if (s.iterable.type != 0) { 
                         int32_t idx = (int32_t)s.i;
                         if (s.iterable.type == 2) {
                             int off = s.iterable.v >> 16, sz = s.iterable.v & 0xFFFF;
-                            if (idx >= 0 && idx < sz && off + idx < MAX_LOCAL_ARRAY) val = local_array_mem[off + idx];
+                            if (idx >= 0 && idx < sz && off + idx < MAX_LOCAL_ARRAY) {
+                                float raw = local_array_mem[off + idx];
+                                if (is_vec_tag(raw)) { item_val.type = 2; item_val.v = decode_vec(raw); }
+                                else if (is_str_tag(raw)) { item_val.type = 4; item_val.v = decode_str(raw); }
+                                else { item_val.type = 0; item_val.f = sanitize(raw); }
+                            }
                         } else if (s.iterable.type == 3 && global_array_capacity > 0) {
-                            if (idx >= 0 && idx < global_array_capacity) val = global_array_mem[idx];
+                            if (idx >= 0 && idx < global_array_capacity) {
+                                float raw = global_array_mem[idx];
+                                if (is_vec_tag(raw)) { item_val.type = 2; item_val.v = decode_vec(raw); }
+                                else if (is_str_tag(raw)) { item_val.type = 4; item_val.v = decode_str(raw); }
+                                else { item_val.type = 0; item_val.f = sanitize(raw); }
+                            }
+                        } else if (s.iterable.type == 4) { 
+                            String str = string_table[s.iterable.v];
+                            int sz = str.length();
+                            if (idx >= 0 && idx < sz) {
+                                char c = str[idx];
+                                float val = 0.0f;
+                                if (c >= '0' && c <= '9') val = c - '0';
+                                else if (c >= 'a' && c <= 'z') val = c - 'a' + 10;
+                                else if (c >= 'A' && c <= 'Z') val = c - 'A' + 36;
+                                item_val.type = 0; item_val.f = val;
+                            }
                         }
                     }
-                    s.current_val = val; 
+                    s.current_val = item_val; 
                     if (sp < 511) { vm_stack[++sp].type = 0; vm_stack[sp].f = (s.type == 3) ? s.acc : 0.0f; } 
-                    tos.type = 0; tos.f = val; 
+                    tos = item_val; 
                 }
             } else { tos.type = 0; tos.f = 0.0f; } BOING();
         }
@@ -440,7 +519,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
                 else if (s.type == 3) { s.acc = tos.f; sp = s.saved_sp; } 
                 else if (s.type == 4) { 
                     sp = s.saved_sp; 
-                    if (tos.f != 0.0f) { if (sp < 511) { vm_stack[++sp].type = 0; vm_stack[sp].f = s.current_val; } s.acc += 1.0f; }
+                    if (tos.f != 0.0f) { if (sp < 511) { vm_stack[++sp] = s.current_val; } s.acc += 1.0f; }
                 }
                 else { sp = s.saved_sp; if (sp < 511) vm_stack[++sp] = tos; } 
                 s.i += 1.0f; pc -= inst.val - 1;     

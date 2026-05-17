@@ -8,11 +8,6 @@ Theme themes[3] = {
 int current_theme_idx = 0;
 
 #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
-httpd_handle_t stream_server = NULL;
-DNSServer dnsServer;
-const byte DNS_PORT = 53;
-bool is_streaming = false;
-
 Preferences prefs;
 VisMode current_vis = VIS_WAV_WIRE; 
 LGFX_Sprite canvas(&M5.Display);
@@ -44,7 +39,7 @@ const PresetConfig defaultBanks[10][10] = {
         {"(t>>6|t<<1)+(t>>5|t<<3|t>>10)", 8000, MODE_BYTEBEAT},
         {"t*(42&t>>10)", 8000, MODE_BYTEBEAT},
         {"t>>4|t>>5|t%256", 8000, MODE_BYTEBEAT},
-        {"t*[0,1,1.2,4/3,3/2,8/5,16/9,2]['110033003333004455003300330030504400220022004400550033003300303011003300333300445500330033003355777766665050404055003300333300557700770066005500444422332200202040606060605050404055003300333300557700770066005500444433222222404060606060505040405500330033330033'[t>>9]]*3", 8000, MODE_BYTEBEAT},
+        {"t*[0,1,1.2,4/3,3/2,8/5,16/9,2]['110033003333004455003300330030504400220022004400550033003300303011003300333300445500330033003355777766665050404055003300333300557700770066005500444422332200202040606060605050404055003300333333'[t>>9]]*6", 8000, MODE_BYTEBEAT},
         {"(t*t/(1+t>>10))&t>>8", 8000, MODE_BYTEBEAT},
         {"t&t>>8", 8000, MODE_BYTEBEAT},
         {"t*(t>>11&t>>8&123&t>>3)", 8000, MODE_BYTEBEAT},
@@ -62,7 +57,7 @@ const PresetConfig defaultBanks[10][10] = {
         {"a=t*2**([1,2,3][t>>22&3]/4),b=t*2**([1,2,3][t>>11&63]/12+2),(3*a^t>>6&256/'1112'[t>>14&3]-1|a)%256*2/3+(b^b*2)%256/3", 8000, MODE_BYTEBEAT},                                               
         {"a=[1,2,3][(t>>10)%4]*[2,4,5,6][(t>>16)%4]*t,b=a%32+t>>a,c=b%t+a,[(t>>a)+b,c]", 32000, MODE_BYTEBEAT},                                  
         {"t*(4|t>>13&3)>>(~t>>11&1)&128|t*(t>>11&t>>13)*(~t>>9&3)&127", 8000, MODE_BYTEBEAT}, 
-        {"t*=10000/44100,w=(t/8*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.3,6,4.8,5.4,2.7,1.35,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][(t>>11)%32]*1.52),c=(100000/(t&4095)&64),e=(t*[1,1,1,1,4/6,4.8/8,1,1][t>>13&7]*1.52)%256/4,v=random()*((-t>>5)%64+64),k=32,min(255,w%k+w*1.99%k+w*.505%k+c+e+v/1.2)", 48000, MODE_BYTEBEAT} 
+        {"t*21/4*[0,1,4/3,6/5,8/9]['10101010110010101010101011001010202020202200202030303030330030401010101011001010101010101100102010101010110010101010101011001033'[t/415&127]]", 8000, MODE_BYTEBEAT} 
     },
     
     // BANK 3: FLOATBEAT (48kHz Floatbeat)
@@ -148,7 +143,9 @@ const PresetConfig defaultBanks[10][10] = {
         {"p=(p+mf*PI/sr)%TAU,x=tan(cos(p+s(p)*1.5)*0.9),s(0.15*exp(exp(abs(x))))*0.5", 48000, MODE_FLOATBEAT},                                         
         {"v+=(mg-v)*.005,w+=(mg-w)*.00005,P=t*mf*TAU/sr,E=8+32*(v-w),sin(sin(sin(P*16)/100*E+P)/8*E+P)*E/64*v", 48000, MODE_FLOATBEAT}                                                  
     },
-    
+    // v+=(mg-v)*.005,T=t+2**(10+(t>>15&2)),x-=T&T>>9,sin(T*mf*PI*2/sr*((T&T>>3)^x)/x)*v
+    // T+=t+2**(15+(t>>6&12)),sin(t/sr+sin(T*mf*tau/sr))
+    // v+=(mg-v)*.002,P=t*mf*PI*2/sr,(sin(P*(3+(t&6)/6))+sin(P*(1+(t&7)/8)))*.5*v
     // BANK 9: EMPTY
     { EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET, EMPTY_PRESET }
 };

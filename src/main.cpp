@@ -1,12 +1,10 @@
 #include <WiFi.h>
-#include <ESPmDNS.h>
 #include <esp_task_wdt.h> 
 #include <nvs_flash.h> 
 #include "state.h"
 #include "vm.h"
 #include "fast_math.h"
 #include "ui.h"
-#include "captive.h"
 #include "fasti2s.h" 
 #include "sync.h"
 #include "usb_midi_handler.h"
@@ -216,6 +214,8 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
 
 /**
  * Updates UI and evaluator state based on compilation results.
+ * @param valid Boolean indicating if the compilation was successful
+ * @param prefix Optional prefix string for the status message
  */
 void applyCompilationResult(bool valid, String prefix = "") {
     if (valid) {
@@ -245,6 +245,7 @@ void processUIRingBuffer() {
 
 /**
  * Core 0 UI/Input Task. Handles Keyboard, IMU, Screen, and Networking.
+ * @param pvParameters FreeRTOS task params
  */
 void uiTask(void *pvParameters) {
     static uint32_t last_sensor_poll = 0; 
@@ -458,12 +459,10 @@ void uiTask(void *pvParameters) {
                 for (auto c : st.word) {
                     if (c == '`') { doEditorClearAll(); }
                     if (c == 'l' || c == 'L') {
-                        if (is_streaming) { WiFi.softAPdisconnect(true); is_streaming = false; delay(50); }
                         if (!is_sync_initialized) { initESPNowSync(); is_sync_initialized = true; }
                         is_sync_master = false; status_msg = "SYNC: LISTENING"; status_timer = millis() + 1500;
                     }
                     if (c == 'p' || c == 'P') {
-                        if (is_streaming) { WiFi.softAPdisconnect(true); is_streaming = false; delay(50); }
                         if (!is_sync_initialized) { initESPNowSync(); is_sync_initialized = true; }
                         if (!is_sync_master) {
                             is_sync_master = true; broadcastPlay(t_raw); broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT); status_msg = "SYNC: MASTER UP";
@@ -498,16 +497,6 @@ void uiTask(void *pvParameters) {
                     if (c == 'r' || c == 'R') {
                         t_raw = 0; status_msg = "TIMELINE RESET"; status_timer = millis() + 1500;
                         if (is_sync_master) broadcastPlay(0);
-                    }
-                    if (c == 'w' || c == 'W') {
-                        if (is_sync_initialized) { esp_now_deinit(); WiFi.disconnect(true); is_sync_initialized = false; is_sync_master = false; delay(50); }
-                        if (!is_streaming) {
-                            WiFi.persistent(false); WiFi.mode(WIFI_AP); WiFi.softAPConfig(IPAddress(192, 168, 4, 1), IPAddress(192, 168, 4, 1), IPAddress(255, 255, 255, 0));
-                            if (WiFi.softAP("BYTEBED")) {
-                                MDNS.begin("bytebed"); is_streaming = true; initBytebeatServer(); xTaskCreatePinnedToCore(startDnsHijack, "DNS", 2048, NULL, 1, NULL, 1); status_msg = "WIFI ACTIVE";
-                            }
-                        } else { WiFi.softAPdisconnect(true); WiFi.mode(WIFI_OFF); is_streaming = false; status_msg = "WIFI OFF"; }
-                        status_timer = millis() + 1500;
                     }
                     if (c == 't' || c == 'T') { current_theme_idx = (current_theme_idx + 1) % 3; bg_sprite.fillScreen(theme.bg); }
                     if (c == 's' || c == 'S') { 

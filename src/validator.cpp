@@ -42,6 +42,7 @@ bool validateProgram(uint8_t bank, int len) {
     
     int v_loop_pcs[16];
     int v_loop_types[16];
+    int v_loop_saved_sp[16]; 
     int v_loop_ptr = -1;
 
     memset(l_vars.get(), 0, 64 * sizeof(Val));
@@ -52,9 +53,9 @@ bool validateProgram(uint8_t bank, int len) {
         Instruction& inst = program_bank[bank][pc];
         
         switch (inst.op) {
-            case OP_VAL: case OP_T: 
+            case OP_VAL: case OP_T: case OP_LOAD_STR:
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow pushing value at PC " + String(pc));
-                sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; 
+                sp++; v_stack[sp].type = 0; v_stack[sp].f = getF(inst.val); 
                 break;
             
             case OP_LOAD: 
@@ -121,9 +122,14 @@ bool validateProgram(uint8_t bank, int len) {
                 if (inst.val < 0 || inst.val >= 64) V_ERR("ERR: VAR @" + String(pc), "Invalid unbind ID at PC " + String(pc));
                 if (l_ssp >= 0) l_vars[inst.val] = l_shadow_val[l_ssp--]; break;
             
-            case OP_VEC: 
-                sp = std::max(-1, sp - 1);
-                if (sp >= 0) v_stack[sp].type = 2; break; 
+            case OP_VEC: {
+                if (sp < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on array creation");
+                int size = (int)v_stack[sp].f; 
+                if (size < 0 || sp - size < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow consuming array items");
+                sp -= size; 
+                v_stack[sp].type = 2; 
+                break;
+            }
             
             case OP_ALLOC: if (sp >= 0) v_stack[sp].type = 3; break;
             case OP_AT: if (sp >= 1) { sp--; v_stack[sp].type = 0; } break;
@@ -136,12 +142,14 @@ bool validateProgram(uint8_t bank, int len) {
                         v_loop_ptr++;
                         v_loop_pcs[v_loop_ptr] = v_stack[sp].v;
                         v_loop_types[v_loop_ptr] = inst.val;
+                        v_loop_saved_sp[v_loop_ptr] = sp - 2;
                     }
                 } else {
                     if (v_loop_ptr < 15) {
                         v_loop_ptr++;
                         v_loop_pcs[v_loop_ptr] = -1;
                         v_loop_types[v_loop_ptr] = inst.val;
+                        v_loop_saved_sp[v_loop_ptr] = sp - 2;
                     }
                 }
                 sp -= 2; 
@@ -149,8 +157,10 @@ bool validateProgram(uint8_t bank, int len) {
             }
             
             case OP_LOOP_EVAL: {
-                sp++; 
                 if (v_loop_ptr >= 0 && v_loop_pcs[v_loop_ptr] != -1) {
+                    sp = v_loop_saved_sp[v_loop_ptr] + 2; 
+                    if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on loop eval at PC " + String(pc));
+                    v_stack[sp-1].type = 0;
                     v_stack[sp].type = 0; 
                     if (csp < 511) {
                         c_stack[++csp] = pc; 
@@ -158,8 +168,14 @@ bool validateProgram(uint8_t bank, int len) {
                         v_loop_pcs[v_loop_ptr] = -1; 
                     } else V_ERR("ERR: CALL_OVF @" + String(pc), "Call Stack Overflow on loop eval at PC " + String(pc));
                 } else {
-                    int ltype = (v_loop_ptr >= 0) ? v_loop_types[v_loop_ptr] : 0;
-                    v_stack[sp].type = (ltype == 0 || ltype == 3) ? 0 : 2; 
+                    if (v_loop_ptr >= 0) {
+                        sp = v_loop_saved_sp[v_loop_ptr];
+                        int ltype = v_loop_types[v_loop_ptr];
+                        sp++; 
+                        v_stack[sp].type = (ltype == 0 || ltype == 3) ? 0 : 2; 
+                        v_loop_ptr--; 
+                    }
+                    pc += inst.val - 1; 
                 }
                 break;
             }

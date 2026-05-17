@@ -4,8 +4,6 @@
 #include <M5Cardputer.h>
 #include <M5Unified.h>
 #include <Preferences.h>
-#include <esp_http_server.h>
-#include <DNSServer.h>
 #else
 #include "Arduino.h" 
 #endif
@@ -49,6 +47,7 @@ enum OpCode : uint8_t {
     OP_INT,
     OP_DUP, OP_SWAP, OP_ROT, OP_OVER,
     OP_LOOP_PREP, OP_LOOP_EVAL, OP_LOOP_DONE, 
+    OP_LOAD_STR, 
     OP_COLON
 };
 
@@ -76,11 +75,6 @@ struct SlotState {
 };
 
 #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
-extern httpd_handle_t stream_server;
-extern DNSServer dnsServer;
-extern const byte DNS_PORT;
-extern bool is_streaming;
-
 extern Preferences prefs;
 extern LGFX_Sprite canvas;
 extern LGFX_Sprite bg_sprite; 

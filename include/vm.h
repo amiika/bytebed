@@ -19,7 +19,7 @@ struct Instruction {
 };
 
 struct Val {
-    uint8_t type; 
+    uint8_t type; // 0=Float, 1=Func, 2=LocalArr, 3=GlobalArr, 4=String
     union {
         int32_t v;
         float f;
@@ -104,6 +104,9 @@ extern volatile uint8_t active_bank;
 
 extern Val vars[64];
 extern int var_count;
+
+extern String string_table[64];
+extern int string_table_count;
 
 extern float* global_array_mem;
 extern int32_t global_array_capacity;
