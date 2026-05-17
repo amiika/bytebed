@@ -839,7 +839,7 @@ let isBooting = false;
 
 let wasmReadyPromise = (async function initWASM() {
     try {
-        const response = await fetch('../wasm/bytebed.wasm');
+        const response = await fetch('bytebed.wasm');
         wasmBytesGlobal = await response.arrayBuffer();
         
         const results = await WebAssembly.instantiate(wasmBytesGlobal, { env: { memory: new WebAssembly.Memory({ initial: 256 }) } });
