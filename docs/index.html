@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Bytebed</title>
     
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -12,13 +12,15 @@
         body { 
             background: #050505; color: #00ff00; font-family: 'Courier New', monospace; 
             margin: 0; display: flex; justify-content: center; align-items: center; 
-            height: 100vh; overflow: hidden; 
+            height: 100vh; height: 100dvh; 
+            overflow: hidden; 
+            overscroll-behavior: none;
         }
         
         #corner-buttons {
             position: fixed;
-            top: 15px;
-            right: 15px;
+            top: max(15px, env(safe-area-inset-top));
+            right: max(15px, env(safe-area-inset-right));
             display: flex;
             gap: 8px;
             z-index: 100;
@@ -31,7 +33,7 @@
 
         #container { 
             width: 95%;
-            max-width: 1000px;
+            max-width: 1200px;
             height: 90vh; 
             background: #000; 
             border: 1px solid #111; border-radius: 4px; 
@@ -40,13 +42,17 @@
             position: relative;
         }
         
+        /* Mobile First: Stacked safely to prevent overlaps */
         #header { 
             display: flex; 
-            flex-direction: column;
+            flex-direction: column; 
+            align-items: flex-start;
             gap: 15px;
-            padding: 15px; 
+            padding: max(15px, env(safe-area-inset-top)) max(15px, env(safe-area-inset-right)) 15px max(15px, env(safe-area-inset-left)); 
             border-bottom: 1px solid #111; 
             background: #050505; 
+            width: 100%;
+            box-sizing: border-box;
         }
         
         .meta { 
@@ -56,7 +62,8 @@
             letter-spacing: 2px; 
             opacity: 0.9; 
             margin: 0; 
-            text-align: center;
+            text-align: left; /* Permanently locked left */
+            line-height: 38px; /* Mathematically perfectly aligns with 38px height of the corner buttons */
             text-shadow: 0 0 10px rgba(0, 255, 0, 0.4);
         }
         
@@ -70,19 +77,20 @@
             padding-bottom: 5px; 
             -webkit-overflow-scrolling: touch;
             scrollbar-width: none;
+            width: 100%;
+            justify-content: flex-start;
         }
         
         .controls::-webkit-scrollbar { display: none; } 
         
         #viz-wrapper { 
-            flex-grow: 1; position: relative; background: #000; overflow: hidden; cursor: crosshair; touch-action: none; min-height: 100px;
+            flex-grow: 1; position: relative; background: #000; overflow: hidden; cursor: crosshair; touch-action: none; min-height: 0;
         }
         
         canvas { width: 100%; height: 100%; display: block; }
         
         #ui { 
-            padding: 10px; 
-            padding-bottom: 35px;
+            padding: 10px max(10px, env(safe-area-inset-right)) max(35px, env(safe-area-inset-bottom)) max(10px, env(safe-area-inset-left));
             background: #050505; 
             border-top: 1px solid #111; 
             position: relative;
@@ -91,31 +99,23 @@
         textarea { 
             width: 100%; background: transparent; color: #00ff00; border: none; 
             font-family: 'VT323', sans-serif; font-size: 18px; outline: none; resize: none; 
-            height: 80px;
-            max-height: 35vh;
+            height: auto; 
+            min-height: 80px; 
+            max-height: 60vh;
             overflow-y: auto;
+            display: block;
         }
 
-        textarea::-webkit-scrollbar {
-            width: 14px;
-        }
-        textarea::-webkit-scrollbar-track {
-            background: #020202; 
-            border-left: 1px solid #111;
-        }
-        textarea::-webkit-scrollbar-thumb {
-            background: #003300; 
-            border: 1px solid #00ff00;
-        }
-        textarea::-webkit-scrollbar-thumb:hover {
-            background: #005500; 
-        }
+        textarea::-webkit-scrollbar { width: 14px; }
+        textarea::-webkit-scrollbar-track { background: #020202; border-left: 1px solid #111; }
+        textarea::-webkit-scrollbar-thumb { background: #003300; border: 1px solid #00ff00; }
+        textarea::-webkit-scrollbar-thumb:hover { background: #005500; }
 
         #error-display {
             position: absolute;
-            bottom: 8px;
-            left: 10px;
-            right: 10px;
+            bottom: max(8px, env(safe-area-inset-bottom));
+            left: max(10px, env(safe-area-inset-left));
+            right: max(10px, env(safe-area-inset-right));
             color: #ff3333; 
             font-family: 'VT323', sans-serif;
             font-size: 18px;
@@ -149,7 +149,7 @@
             font-size: 18px; 
         }
 
-        #settings-modal {
+        #settings-modal, #help-modal {
             display: none;
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -162,65 +162,95 @@
         }
 
         .modal-content {
-            background: #050505;
-            border: 1px solid #00ff00;
-            padding: 25px;
-            width: 85%;
-            max-width: 500px;
-            position: relative;
-            box-shadow: 0 0 30px rgba(0, 255, 0, 0.15);
-            border-radius: 4px;
+            background: #050505; border: 1px solid #00ff00; padding: 25px; width: 85%;
+            max-width: 500px; position: relative; box-shadow: 0 0 30px rgba(0, 255, 0, 0.15); border-radius: 4px;
         }
 
-        .modal-close {
-            position: absolute;
-            top: 10px;
-            right: 15px;
-            cursor: pointer;
-            font-size: 28px;
-            color: #00ff00;
-            user-select: none;
-        }
-
+        .modal-close { position: absolute; top: 10px; right: 15px; cursor: pointer; font-size: 28px; color: #00ff00; user-select: none; }
         .modal-close:active { transform: scale(0.9); }
+        .modal-content h2 { margin: 0 0 10px 0; font-size: 28px; text-shadow: 0 0 8px rgba(0, 255, 0, 0.4); }
+        .modal-content p.desc { font-size: 18px; line-height: 1.4; color: #aaa; margin-bottom: 20px; }
+        .modal-content a.inline-link { color: #00ff00; text-decoration: underline; text-decoration-color: #004400; }
+        .modal-content a.inline-link:hover { color: #fff; }
+        .modal-section { margin-top: 20px; border-top: 1px dashed #004400; padding-top: 15px; }
+        .modal-section h3 { margin: 0 0 10px 0; font-size: 20px; color: #00cc00; }
 
-        .modal-content h2 {
-            margin: 0 0 10px 0;
-            font-size: 28px;
-            text-shadow: 0 0 8px rgba(0, 255, 0, 0.4);
-        }
-
-        .modal-content p.desc {
-            font-size: 18px;
-            line-height: 1.4;
-            color: #aaa;
-            margin-bottom: 20px;
-        }
-
-        .modal-section {
-            margin-top: 20px;
-            border-top: 1px dashed #004400;
-            padding-top: 15px;
-        }
-
-        .modal-section h3 {
-            margin: 0 0 10px 0;
-            font-size: 20px;
-            color: #00cc00;
-        }
-
-        @media (min-width: 768px) {
+        /* --- DESKTOP LAYOUT (Requires ample width AND ample height) --- */
+        @media (min-width: 1100px) and (min-height: 600px) {
             #container { width: 80%; height: 600px; }
-            #header { flex-direction: row; justify-content: space-between; align-items: center; }
-            .meta { text-align: left; margin: 0; }
-            .controls { overflow-x: visible; justify-content: flex-end; flex-grow: 1; }
-            textarea { height: 120px; }
+            #header { 
+                flex-direction: row; /* Safely puts BYTEBED and Controls on the same line */
+                justify-content: space-between; 
+                align-items: center; 
+            }
+            .meta { margin: 0; }
+            .controls { overflow-x: visible; justify-content: flex-end; width: auto; }
+            textarea { min-height: 120px; }
+        }
+
+        /* Horizontal phone */
+        @media (max-width: 1099px), (max-height: 599px) {
+            #container { width: 100%; height: 100%; border: none; border-radius: 0; box-shadow: none; }
+            
+            #header {
+                flex-direction: column;
+                padding: max(10px, env(safe-area-inset-top)) max(10px, env(safe-area-inset-right)) 10px max(10px, env(safe-area-inset-left));
+                gap: 10px;
+            }
+
+            .meta { 
+                font-size: 20px; 
+                line-height: 30px; 
+            }
+
+            #corner-buttons {
+                top: max(10px, env(safe-area-inset-top));
+                right: max(10px, env(safe-area-inset-right));
+            }
+            #corner-buttons .btn-icon { height: 30px; width: 30px; font-size: 18px; }
+
+            #ui { padding: 5px max(10px, env(safe-area-inset-right)) 10px max(10px, env(safe-area-inset-left)); }
+            
+            textarea { min-height: 40px; font-size: 14px; max-height: 50vh; }
+            
+            .controls {
+                gap: 4px;
+            }
+
+            .btn { 
+                height: 30px; 
+                font-size: 14px; 
+                padding: 0 6px; 
+                flex-shrink: 1; 
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+            }
+            
+            .btn-icon { 
+                width: 30px; 
+                font-size: 16px; 
+                flex-shrink: 0;
+            }
+
+            #bank-btn, #patch-btn, #rate-btn {
+                flex-shrink: 0;
+            }
+        }
+
+        /* Vertical phone */
+        @media (max-width: 400px) {
+            .controls { gap: 3px; }
+            .btn { padding: 0 4px; font-size: 13px; }
+            .btn-icon { width: 28px; }
         }
     </style>
 </head>
 <body>
+
     <div id="corner-buttons">
-        <span id="settings-btn" class="btn btn-icon" title="Setup & Info">⚙</span>
+        <span id="help-btn" class="btn btn-icon" title="Help & Info">?</span>
+        <span id="settings-btn" class="btn btn-icon" title="Settings">⚙</span>
         <span id="share-btn" class="btn btn-icon" title="Share URL" onclick="shareCode(event)">↗&#xFE0E;</span>
     </div>
 
@@ -228,6 +258,10 @@
         <div id="header">
             <div class="meta" id="status">BYTEBED</div>
             <div class="controls">
+
+                <span id="play-btn" class="btn btn-icon" onclick="togglePlay(event)">▶&#xFE0E;</span>
+                <span id="stop-btn" class="btn btn-icon" onclick="resetT(event)">▢&#xFE0E;</span>
+
                 <span id="rate-btn" class="btn" title="Sample rate" onclick="cycleRate(event)">8000HZ</span>
                 <span id="format-btn" class="btn" title="Bytebeat mode" onclick="toggleFormat(event)">BYTEBEAT</span>
 
@@ -240,8 +274,6 @@
                 <span id="mode-btn" class="btn active" title="Syntax mode" onclick="toggleMode(event)">INFIX</span>
                 <span id="btn-auto" class="btn active" title="Auto compile" onclick="toggleAuto(event)">AUTO</span>
 
-                <span id="play-btn" class="btn btn-icon" onclick="togglePlay(event)">▶&#xFE0E;</span>
-                <span id="stop-btn" class="btn btn-icon" onclick="resetT(event)">▢&#xFE0E;</span>
             </div>
         </div>
 
@@ -255,34 +287,62 @@
         </div>
     </div>
 
-    <div id="settings-modal">
+    <!-- Help & Info Modal -->
+    <div id="help-modal">
         <div class="modal-content">
-            <span class="modal-close" id="close-modal">&times;</span>
+            <span class="modal-close" id="close-help">&times;</span>
             <h2>BYTEBED</h2>
-            <p class="desc">Bytebeat bytecode virtual machine written in C++ for M5Stack Cardputers. This is the WASM version suitable for testing and sharing patches online. Source and binaries in <a href="https://github.com/amiika/bytebed">Github</a>.</p>
+            <p class="desc">Bytebeat bytecode virtual machine written in C++ for M5Stack Cardputers. This is the WASM version suitable for testing and sharing patches online. Source and binaries in <a href="https://github.com/amiika/bytebed" class="inline-link" target="_blank">Github</a>.</p>
             
             <div class="modal-section">
+                <h3>MORE INFO</h3>
+                <a href="bytebed.html" class="btn" target="_blank" style="margin-top: 5px;">Bytebed information</a>
+                <a href="cheatsheet.html" class="btn" target="_blank" style="margin-top: 5px;">Bytebeat & Floatbeat Cheatsheet</a>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal">
+        <div class="modal-content">
+            <span class="modal-close" id="close-settings">&times;</span>
+            <h2>SETTINGS</h2>
+            
+            <div class="modal-section" style="margin-top: 0; border-top: none; padding-top: 0;">
                 <h3>MIDI CONFIGURATION</h3>
                 <div style="display: flex; gap: 6px;">
                     <span id="midi-btn" class="btn" title="MIDI Port" onclick="cycleMIDI(event)">M: OFF</span>
                     <span id="midi-chan-btn" class="btn active" title="MIDI Channel" onclick="cycleMIDIChannel(event)">C: ALL</span>
                 </div>
             </div>
-
         </div>
     </div>
+
+    <span id="share-btn-global" style="display:none;"></span> 
 
     <script>
         document.addEventListener("DOMContentLoaded", () => {
             const settingsBtn = document.getElementById("settings-btn");
             const settingsModal = document.getElementById("settings-modal");
-            const closeModal = document.getElementById("close-modal");
+            const closeSettings = document.getElementById("close-settings");
             
             settingsBtn.addEventListener("click", () => settingsModal.style.display = "flex");
-            closeModal.addEventListener("click", () => settingsModal.style.display = "none");
+            closeSettings.addEventListener("click", () => settingsModal.style.display = "none");
             settingsModal.addEventListener("click", (e) => {
                 if (e.target === settingsModal) settingsModal.style.display = "none";
             });
+
+            const helpBtn = document.getElementById("help-btn");
+            const helpModal = document.getElementById("help-modal");
+            const closeHelp = document.getElementById("close-help");
+
+            helpBtn.addEventListener("click", () => helpModal.style.display = "flex");
+            closeHelp.addEventListener("click", () => helpModal.style.display = "none");
+            helpModal.addEventListener("click", (e) => {
+                if (e.target === helpModal) helpModal.style.display = "none";
+            });
+
+            window.shareBtn = document.getElementById("share-btn"); 
         });
     </script>
     <script src="emulator.js"></script> 

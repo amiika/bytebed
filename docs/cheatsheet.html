@@ -1,0 +1,502 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bytebed Engineering Protocol - B&W Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=JetBrains+Mono:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        :root { --bg-page: #ffffff; --text-main: #000000; --border: #000000; }
+        body { font-family: 'Inter', sans-serif; background-color: #f1f1f1; color: var(--text-main); margin: 0; padding: 0; }
+        .mono { font-family: 'JetBrains Mono', monospace; }
+        
+        .a4-page {
+            width: 210mm;
+            height: 297mm;
+            padding: 12mm;
+            margin: 2rem auto;
+            background: var(--bg-page);
+            box-shadow: 0 0 0 1px #ddd;
+            position: relative;
+            outline: 1px solid black;
+            overflow: hidden;
+            box-sizing: border-box;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.3rem;
+            margin-top: 0.6rem;
+            border-bottom: 2px solid black;
+        }
+
+        .section-header h3 {
+            font-weight: 900;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            background: black;
+            color: white;
+            padding: 2px 8px;
+            margin: 0;
+        }
+
+        .sub-sec {
+            font-weight: 900;
+            font-size: 0.65rem;
+            text-transform: uppercase;
+            margin-top: 0.4rem;
+            margin-bottom: 0.1rem;
+            display: block;
+            border-left: 3px solid black;
+            padding-left: 6px;
+        }
+
+        p { font-size: 0.62rem; line-height: 1.35; margin-bottom: 0.3rem; }
+
+        pre {
+            background: #f8f8f8;
+            padding: 0.4rem;
+            border: 1px solid black;
+            font-size: 0.6rem;
+            color: #000;
+            overflow-x: auto;
+            margin: 0.2rem 0;
+            cursor: pointer;
+            line-height: 1.3;
+            position: relative;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+        
+        pre:hover { background: #000; color: #fff; }
+
+        /* --- Custom Play Controls CSS --- */
+        .play-btn-overlay {
+            position: absolute;
+            top: 4px;
+            right: 4px;
+            display: none;
+            gap: 4px;
+            z-index: 10;
+        }
+        pre:hover .play-btn-overlay {
+            display: flex;
+        }
+        .ctrl-btn {
+            background: black;
+            color: white;
+            border: 1px solid white;
+            padding: 2px 6px;
+            font-size: 0.65rem;
+            cursor: pointer;
+            font-family: 'JetBrains Mono', monospace;
+            line-height: 1;
+        }
+        .ctrl-btn:hover {
+            background: white;
+            color: black;
+            border-color: black;
+        }
+        /* -------------------------------- */
+
+        table { width: 100%; border-collapse: collapse; font-size: 0.6rem; margin: 0.3rem 0; }
+        th { border: 1px solid black; background: #000; color: #fff; text-align: left; padding: 2px 4px; text-transform: uppercase; font-weight: bold; }
+        td { border: 1px solid black; padding: 2px 4px; }
+
+        .grid-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 6mm; align-items: start; }
+        .operator-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+        
+        .op-box { border: 1px solid black; padding: 4px; background: #fff; }
+        .op-box h4 { font-size: 0.6rem; font-weight: 900; border-bottom: 1px solid black; margin-bottom: 2px; text-transform: uppercase; }
+        .op-box p { margin-bottom: 0; font-size: 0.58rem; }
+
+        @media print {
+            body { 
+                background: white; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact; 
+            }
+            .a4-page { margin: 0; box-shadow: none; border: none; outline: none; width: 210mm; height: 297mm; page-break-after: always; }
+            .no-print { display: none !important; }
+            .play-btn-overlay { display: none !important; }
+        }
+
+        .toast {
+            position: fixed; bottom: 20px; right: 20px; background: #000; color: #fff;
+            padding: 10px 20px; border-radius: 0; font-size: 0.8rem; font-weight: bold;
+            opacity: 0; pointer-events: none; transition: opacity 0.3s; z-index: 9999;
+            border: 2px solid white; outline: 2px solid black;
+        }
+    </style>
+</head>
+<body>
+
+<div id="page-1" class="a4-page">
+    <header class="border-b-[6px] border-black pb-2 mb-3">
+        <h2 class="text-4xl font-black tracking-tighter leading-none m-0">BYTEBEAT</h2>
+    </header>
+
+    <div class="grid-two-col">
+        <div>
+            <div class="section-header"><h3>1. TIME</h3></div>
+            <p>Bytebeat outputs unsigned 8-bit audio at 8000Hz. The variable <b>t</b> increments by 1 for every sample. The environment truncates output to 8 bits, values above 255 wrap back to 0 creating a sawtooth wave.</p>
+            <table>
+                <thead><tr><th>Integer</th><th>Binary</th><th>Truncated</th><th>Decimal</th></tr></thead>
+                <tbody class="mono">
+                    <tr><td>254</td><td>0011111110</td><td>11111110</td><td>254</td></tr>
+                    <tr><td>255</td><td>0011111111</td><td>11111111</td><td>255</td></tr>
+                    <tr><td>256</td><td>0100000000</td><td>00000000</td><td>0</td></tr>
+                </tbody>
+            </table>
+            <pre class="mono" data-sr="8000" data-mode="bytebeat">t</pre>
+            <div class="section-header"><h3>2. ARITHMETICS</h3></div>
+            <p>Arithmetic directly alters the phase and frequency of the wrapping sawtooth wave.</p>
+            <div class="operator-grid">
+                <div class="op-box">
+                    <h4>+ ADD - SUB</h4>
+                    <p>t + 128 shifts phase. -t flips the wave slope.</p>
+                </div>
+                <div class="op-box">
+                    <h4>* MULT / DIV</h4>
+                    <p>t * 2 = octave up. t / 2 = octave down.</p>
+                </div>
+                <div class="op-box">
+                    <h4>% MODULO</h4>
+                    <p>Forces early wraps.t%128 halves volume.</p>
+                </div>
+                <div class="op-box">
+                    <h4>! = > < COMPARISONS</h4>
+                    <p>Yields 1 or 0. Acts as a boolean gate.</p>
+                </div>
+            </div>
+           <div>
+                <p>Example of operators:</p>
+                <pre class="mono" data-sr="8000" data-mode="bytebeat">t % 8000<4000 ? t : t*5</pre>
+            </div>
+            <div class="section-header"><h3>3. BITWISE</h3></div>
+            <p>Bitwise operators act as logic mixers and toggles values on and off to sculpt complex timbres and melodies.</p>
+            <div class="operator-grid mb-2">
+                <div class="op-box">
+                    <h4>& AND</h4>
+                    <p>Masking: t & 128 isolates the top bit, outputting a pure square wave. Acts as a volume gate.</p>
+                </div>
+                <div class="op-box">
+                    <h4>| OR</h4>
+                    <p>Mixing: t | (t >> 2) preserves high bits of both signals, smearing harmonics for lo-fi chords.</p>
+                </div>
+                <div class="op-box">
+                    <h4>^ XOR</h4>
+                    <p>Exclusive logic. Yields metallic phase-distortion and ring-modulation effects.</p>
+                </div>
+                <div class="op-box">
+                    <h4>~ NOT</h4>
+                    <p>Inversion. Mirrors the binary waveform exactly.</p>
+                </div>
+            </div>
+                       <div>
+                <p>Example of operators:</p>
+                <pre class="mono" data-sr="8000" data-mode="bytebeat">t>>3 | (t>>6) * t & t + (t>>14&4)</pre>
+            </div>
+            <span class="sub-sec">Bitshift vs. Arithmetic</span>
+            <p>Bitwise operations are computationally identical to arithmetic operations. Bitshiftting is multiplying or dividing by powers of 2. For array looping, bitwise & acts as an ultra-fast modulo for array lengths that are exact powers of 2 (2, 4, 8, ...).</p>
+            <table>
+                <thead><tr><th>Bitshit</th><th>Arithmetic</th><th>Effect / Usage</th></tr></thead>
+                <tbody class="mono">
+                    <tr><td>t &lt;&lt; 1</td><td>t * 2</td><td>+1 Octave Up (Double freq)</td></tr>
+                    <tr><td>t &gt;&gt; 1</td><td>t / 2</td><td>-1 Octave Down (Halve freq)</td></tr>
+                    <tr><td>x &amp; 7</td><td>x % 8</td><td>Array loop (Only for 2^n length)</td></tr>
+                    <tr><td>x &amp; 3</td><td>x % 4</td><td>Array loop (Only for 2^n length)</td></tr>
+                    <tr><td>~t</td><td>-t-1</td><td>Phase inversion</td></tr>
+                </tbody>
+            </table>
+        </div>
+        <div>
+            <div class="section-header"><h3>4. RHYTHM</h3></div>
+            <span class="sub-sec">Binary Clocks</span>
+            <p>Bitshifting t scales time. <b>t>>11</b> is the standard demoscene master clock advancing approximately every 0.25 seconds. To trigger rhythm sections: <b>(t>>11)&3</b> creates a 4-step sequence.</p>
+            <pre class="mono" data-sr="8000" data-mode="bytebeat">s=[1,2,3,4], t * s[t>>11&3]</pre>
+
+            <span class="sub-sec">BPM Syncing</span>
+            <p>For exact tempo control, use integer division instead of bitshifting. Calculate Samples Per Beat (Sample Rate * 60 / BPM). For 120 BPM at 8000Hz, SPB is 4000 divide by t and use <b>| 0</b> to floor the value.</p>
+            <pre class="mono" data-sr="8000" data-mode="bytebeat">s=[1,2,3], t * s[(t/4000|0)%3]</pre>
+
+            <div class="section-header"><h3>5. TUNING</h3></div>
+            <p>Whole integer multipliers t * 2, t * 3 jump entirely different octaves. To sequence a normal diatonic scale within a single octave, multiply <b>t</b> by specific fractions between 1.0 and 2.0. To change the root note, apply a base multiplier before the fraction, for example <b>t*1.5</b> shifts root to G.</p>
+            
+            <table>
+                <thead><tr><th>Note</th><th>Interval</th><th>Frac</th><th>Note</th><th>Interval</th><th>Frac</th></tr></thead>
+                <tbody class="mono text-center">
+                    <tr><td>C</td><td>Unison</td><td>1</td><td>G</td><td>Perf 5th</td><td>3/2</td></tr>
+                    <tr><td>D</td><td>Maj 2nd</td><td>9/8</td><td>A</td><td>Maj 6th</td><td>5/3</td></tr>
+                    <tr><td>E</td><td>Maj 3rd</td><td>5/4</td><td>B</td><td>Maj 7th</td><td>15/8</td></tr>
+                    <tr><td>F</td><td>Perf 4th</td><td>4/3</td><td>C'</td><td>Octave</td><td>2</td></tr>
+                </tbody>
+            </table>
+            
+            <pre class="mono mt-1" data-sr="8000" data-mode="bytebeat">s=[1, 9/8, 5/4, 4/3, 3/2, 5/3, 15/8, 2], t * s[(t/2000|0)%8]</pre>
+
+            <div class="section-header"><h3>6. EXAMPLES</h3></div>
+            <div class="flex flex-col gap-1">
+                <div class="op-box">
+                    <h4>The original bytebeat</h4>
+                    <p>The first bytebeat formula created by viznut.</p>
+                    <pre class="mono" data-sr="8000" data-mode="bytebeat">t*((t>>12|t>>8)&63&t>>4)</pre>
+                </div>
+                <div class="op-box">
+                    <h4>The 42 melody</h4>
+                    <p>The classic melodic bytebeat melody discovered by many.</p>
+                    <pre class="mono" data-sr="8000" data-mode="bytebeat">t*(42&t>>10)</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Pulse Width Modulation (PWM)</h4>
+                    <p>Secondary counter dynamically shrinks the square duty cycle.</p>
+                    <pre class="mono" data-sr="8000" data-mode="bytebeat">(t%100>=t/200%100)*255</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Triangle wave</h4>
+                    <p>The -1 offset realigns phase, -t-1 is same as ~t.</p>
+                    <pre class="mono" data-sr="8000" data-mode="bytebeat">v=t*6, (v&511)>255 ? v : ~v</pre>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="page-2" class="a4-page">
+    <header class="border-b-[6px] border-black pb-2 mb-3">
+        <h2 class="text-4xl font-black tracking-tighter leading-none m-0">FLOATBEAT</h2>
+    </header>
+
+    <div class="grid-two-col">
+        <div>
+            <div class="section-header"><h3>1. TIME</h3></div>
+            <p>Floatbeat outputs a signed 32-bit float strictly between <strong>-1.0 and +1.0</strong>. The variable <b>t</b> increments infinitely. Raw values outside these bounds result in hard-clipped silence.</p>
+            <div class="flex flex-col gap-1 mt-1 mb-2">
+                <div class="op-box">
+                    <h4>Manual Sawtooth</h4>
+                    <p>Modulo wraps the infinite counter.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">t%100/50-1.0</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Trigonometric Phase</h4>
+                    <p>Scaling time into a smooth sine oscillator.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">sin(t/20)</pre>
+                </div>
+            </div>
+
+            <div class="section-header"><h3>2. CORE FUNCTIONS</h3></div>
+            <p>Continuous mathematical operations are the primary tools used to shape floating-point audio.</p>
+            <div class="operator-grid mb-2 mt-1">
+                <div class="op-box">
+                    <h4>SIN / COS</h4>
+                    <p>Primary smooth oscillators. Phase must be divided down (t/20).</p>
+                </div>
+                <div class="op-box">
+                    <h4>TAN</h4>
+                    <p>Distorted harmonics due to infinite periodic peaks.</p>
+                </div>
+                <div class="op-box">
+                    <h4>EXP</h4>
+                    <p>Exponential curves for volume decays, like: exp(0.0-t/1000)</p>
+                </div>
+                <div class="op-box">
+                    <h4>LOG / LOG2</h4>
+                    <p>Log curves. Ideal for sharp percussive transients.</p>
+                </div>
+                <div class="op-box">
+                    <h4>ABS / SQRT</h4>
+                    <p>Non-linear wave shapers.</p>
+                </div>
+                <div class="op-box">
+                    <h4>MIN / MAX</h4>
+                    <p>Clamps signals like: max(0, x)</p>
+                </div>
+                
+            </div>
+
+            <div class="section-header"><h3>3. ENVELOPES</h3></div>
+            <p>Abrupt phase resets via modulo create loud DC clicks. Applying an <b>exp()</b> or <b>log()</b> decay dampens the amplitude to <b>0.0</b> before the cycle restarts, ensuring clean transients.</p>
+            <div class="flex flex-col gap-1 mt-1">
+                <div class="op-box">
+                    <h4>Exponential Decay</h4>
+                    <p>Dampens completely over a fixed sample duration with a smooth tail.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%16000, sin(b/20)*exp(0.0-b/2000)</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Logarithmic Decay</h4>
+                    <p>Creates a highly percussive, sharp initial drop. max() clamps the tail.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%16000, sin(b/20)*max(0, 1-log(b/100+1)/5)</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Dynamic Envelope</h4>
+                    <p>Loop and decay scale seamlessly with the sample rate.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%(sr/3), sin(b/20)*exp(0.0-b/(sr/24))</pre>
+                </div>
+            </div>
+        </div>
+        <div>
+            <div class="section-header"><h3>4. MATH & TEMPO</h3></div>
+            <span class="sub-sec">12-TET MIDI Formula</span>
+            <p>To compose using exact western tuning (where MIDI Note 69 = A440), the following formula can be used:</p>
+            <pre class="mono" data-sr="48000" data-mode="floatbeat">f=(n)=>440 * 2 ** ((n-69) / 12), sin(t * f(72) * 6.28 / 48000)</pre>
+
+            <span class="sub-sec">BPM Sync</span>
+            <p>To sequence melodies accurately calculate samples per beat:  (CurrentSample Rate * 60 / BPM). For 120 BPM: 24000 samples.</p>
+            <table>
+                <thead><tr><th>Tempo</th><th>Math (SR * 60 / BPM)</th><th>48kHz SPB</th></tr></thead>
+                <tbody class="mono">
+                    <tr><td>120 BPM</td><td>48000 * (60/120)</td><td>24,000</td></tr>
+                    <tr><td>140 BPM</td><td>48000 * (60/140)</td><td>20,571</td></tr>
+                </tbody>
+            </table>
+            <pre class="mono" data-sr="48000" data-mode="floatbeat">b = t % 24000,&#10;sin(b/20) * exp(0.0 - b/2000)</pre>
+
+            <div class="section-header"><h3>5. EXAMPLES</h3></div>
+            <div class="flex flex-col gap-1 mt-1">
+                <div class="op-box">
+                    <h4>Basic FM</h4>
+                    <p>Classic single line FM.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">m=t/10,sin(m+sin(m*2.0)*2.0)</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Bass Kick</h4>
+                    <p>Decay applied inside the phase array for a rapid pitch drop.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%16000,&#10;sin(b*exp(0.0-b/1500)/15)*exp(0.1-b/4000)</pre>
+                </div>
+                <div class="op-box">
+                    <h4>Phase Lead</h4>
+                    <p>Dense multi-oscillator chords using an array lookup grid.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">gc=t/(t/[12,14,16][(t>>14)%3]),&#10;(sin(t/gc)+sin(t/20)+tan(sin(t/t-t/(gc+.01))))/4</pre>
+                </div>
+                <div class="op-box">
+                    <h4>String Pluck</h4>
+                    <p>Clean, repeating physical model with exact damping curve.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%8000,&#10;sin(b/25)*exp(0.0-b/1800)</pre>
+                </div>
+                 <div class="op-box">
+                    <h4>Bell Tone</h4>
+                    <p>Metallic decay with a complex inharmonic spectrum.</p>
+                    <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%16000,e=exp(-b/2000),sin(b/5+e*4*sin(b/4))*e</pre>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="toast" class="toast uppercase">Formula Copied</div>
+
+<!-- Hidden Player Sandbox strictly for emulator.js context binding -->
+<div id="hidden-player-ui" style="display:none;" class="no-print">
+    <canvas id="viz"></canvas>
+    <div id="viz-wrapper"></div>
+    <textarea id="formula"></textarea>
+    <button id="mode-btn"></button>
+    <button id="btn-auto"></button>
+    <button id="play-btn"></button>
+    <button id="share-btn"></button>
+    <button id="vis-btn"></button>
+    <button id="midi-btn"></button>
+    <button id="midi-chan-btn"></button>
+    <button id="bank-btn"></button>
+    <button id="patch-btn"></button>
+    <button id="format-btn"></button>
+    <button id="rate-btn"></button>
+    <div id="status"></div>
+    <div id="error-display"></div>
+</div>
+
+<script src="emulator.js"></script>
+<script>
+    const toast = document.getElementById('toast');
+    
+    document.querySelectorAll('pre.mono').forEach(pre => {
+        // Build isolated overlay controls
+        const controls = document.createElement('div');
+        controls.className = 'play-btn-overlay no-print';
+        
+        const playBtn = document.createElement('button');
+        playBtn.className = 'ctrl-btn';
+        playBtn.title = 'Play Formula';
+        playBtn.innerHTML = '▶';
+        
+        const stopBtn = document.createElement('button');
+        stopBtn.className = 'ctrl-btn';
+        stopBtn.title = 'Stop Audio';
+        stopBtn.innerHTML = '■';
+
+        controls.appendChild(playBtn);
+        controls.appendChild(stopBtn);
+        pre.appendChild(controls);
+
+        // Safely extract code, ignoring our injected buttons
+        const getSafeCode = () => {
+            const clone = pre.cloneNode(true);
+            const overlay = clone.querySelector('.play-btn-overlay');
+            if(overlay) overlay.remove();
+            return clone.innerText.trim().replace(/\n/g, ' ');
+        };
+
+        playBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            
+            const code = getSafeCode();
+            const sr = pre.getAttribute('data-sr');
+            const mode = pre.getAttribute('data-mode');
+
+            // Hook into emulator.js global states
+            if (typeof resetT === 'function') resetT();
+            
+            const formulaField = document.getElementById('formula');
+            if (formulaField) formulaField.value = code;
+
+            if (typeof targetSampleRate !== 'undefined') {
+                targetSampleRate = parseInt(sr, 10);
+                isFloatbeat = (mode === 'floatbeat');
+                
+                if (wasm) {
+                    if (wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(targetSampleRate);
+                    if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+                    if (wasm.wasm_reset_vm) wasm.wasm_reset_vm();
+                }
+                if (workletNode) {
+                    workletNode.port.postMessage({ type: 'rate', rate: targetSampleRate });
+                    workletNode.port.postMessage({ type: 'mode', mode: isFloatbeat ? 1 : 0 });
+                    workletNode.port.postMessage({ type: 'reset' });
+                }
+            }
+
+            if (typeof compile === 'function') compile(code);
+
+            if (typeof bootAudio === 'function' && !audioBooted) await bootAudio();
+            if (typeof audioCtx !== 'undefined' && audioCtx.state === 'suspended') await audioCtx.resume();
+
+            is_playing = true;
+            if (workletNode) {
+                workletNode.port.postMessage({ type: 'play', playing: true });
+            }
+        });
+
+        stopBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            if (typeof resetT === 'function') resetT();
+        });
+
+        pre.addEventListener('click', () => {
+            const code = getSafeCode();
+            const textArea = document.createElement("textarea");
+            textArea.value = code;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            
+            toast.style.opacity = "1";
+            setTimeout(() => { toast.style.opacity = "0"; }, 1500);
+        });
+    });
+</script>
+
+</body>
+</html>

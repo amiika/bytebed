@@ -26,7 +26,7 @@ void loop() {
 
 Upload this to your ESP board and boom! You have some classic bytebeat going on. If you are happy with this do not bother reading further. Just be happy and move on.
 
-However ... If you want to program bytebeat and floatbeat on the fly on your tiny winey cardputer ... Keep on reading then, I suppose.
+However ... If you want to live code bytebeat and floatbeat on the fly on your tiny winey cardputer ... Keep on reading then, I suppose.
 
 # Bytebed features
 
@@ -86,8 +86,7 @@ Compile & Upload using Platform.io or by using [M5Burner](https://docs.m5stack.c
 # TODO / IDEAS
 
 - Better tests and more systematic approach for supporting floatbeat?
-- Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp
-- Some bytebeat / floatbeat tutorial maybe?
+- Documentation huh? Meanwhile look at test/tests.h ... and vm.cpp. There is also now some sort of cheatcheet under docs.
 
 # Development
 
@@ -95,9 +94,11 @@ Use platform.io and see platform.ini for configuration.
 
 ## WASM
 
-To compile to wasm and wasm binary header file, run this in wasm folder:
+To compile to wasm run this in root folder:
 
-emcc ../src/state.cpp ../src/vm.cpp ../src/compiler.cpp ../src/validator.cpp ../src/decompiler.cpp wasm_wrapper.cpp -I. -I../include -I../src -s EXPORTED_FUNCTIONS="['_main', '_get_input_buffer', '_wasm_compile', '_wasm_execute', '_wasm_decompile', '_wasm_set_sample_rate', '_wasm_set_play_mode', '_wasm_set_midi', '_wasm_set_imu', '_wasm_set_mouse', '_wasm_reset_vm', '_wasm_get_last_error', '_wasm_get_preset_formula', '_wasm_get_preset_rate', '_wasm_get_preset_mode']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o bytebed.wasm
+emcc ./src/state.cpp ./src/vm.cpp ./src/compiler.cpp ./src/validator.cpp ./src/decompiler.cpp ./wasm/wasm_wrapper.cpp -I. -I./include -I./src -I./wasm -s EXPORTED_FUNCTIONS="['_main', '_get_input_buffer', '_wasm_compile', '_wasm_execute', '_wasm_decompile', '_wasm_set_sample_rate', '_wasm_set_play_mode', '_wasm_set_midi', '_wasm_set_imu', '_wasm_set_mouse', '_wasm_reset_vm', '_wasm_get_last_error', '_wasm_get_preset_formula', '_wasm_get_preset_rate', '_wasm_get_preset_mode']" -O3 -s WASM=1 -s STANDALONE_WASM --no-entry -o ./docs/bytebed.wasm
+
+After compiled the wasm file is in the /docs as github pages requires it to be in the same folder.
 
 ## TESTS
 
@@ -127,4 +128,6 @@ Bug reports are also welcome.
 * viznut: [For the very first bytebeats](https://countercomplex.blogspot.com/2011/10/algorithmic-symphonies-from-one-line-of.html)
 * SthephanShinkufag: [Bytebeat-composer](https://github.com/SthephanShinkufag/bytebeat-composer)
 * All the rest with examples from: https://dollchan.net/bytebeat/
-* tanakamasayuki: [EspHttpServer](https://github.com/tanakamasayuki/EspHttpServer)
+* Robert Nystrom and his awesome [Crafting Interpreters Book](https://craftinginterpreters.com/chunks-of-bytecode.html)
+* Google Gemini: Thanks for the help, ALL the CSS and also for trying to be my friend
+* Microsoft Github: You have been awesome. Please do not turn into crap

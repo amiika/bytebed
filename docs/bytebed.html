@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>BYTEBED</title>
+    <link href="https://fonts.googleapis.com/css2?family=Bytesized&family=Jersey+10&family=Micro+5&family=VT323&display=swap" rel="stylesheet">
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #c9d1d9;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-size: 16px;
+            line-height: 1.6;
+            padding: 40px 20px;
+            max-width: 850px;
+            margin: 0 auto;
+        }
+        header {
+            font-family: 'Bytesized', sans-serif;
+            font-size: 42px;
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 20px;
+            margin-bottom: 40px;
+            display: flex;
+            justify-content: center;
+            color: #58a6ff;
+            letter-spacing: 8px;
+        }
+        h1 {
+            font-size: 20px;
+            color: #ffffff;
+            margin-top: 48px;
+            margin-bottom: 16px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+            border-bottom: 1px solid #30363d;
+            padding-bottom: 8px;
+        }
+        p {
+            color: #8b949e;
+            margin-bottom: 16px;
+        }
+        code {
+            font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
+            color: #79c0ff;
+            background-color: rgba(110, 118, 129, 0.1);
+            padding: 0.2em 0.4em;
+            border-radius: 6px;
+            font-size: 85%;
+        }
+        a {
+            color: #58a6ff;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        .dual {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+            margin: 24px 0;
+            position: relative;
+        }
+        .switcher {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background-color: #161b22;
+            border: 1px solid #30363d;
+            color: #58a6ff;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            font-weight: bold;
+            font-size: 20px;
+            box-shadow: 0 0 0 6px #0d1117;
+        }
+        .box {
+            border: 1px solid #30363d;
+            padding: 24px;
+            border-radius: 8px;
+            background-color: #161b22;
+        }
+        .box strong {
+            display: block;
+            color: #58a6ff;
+            font-size: 14px;
+            letter-spacing: 1px;
+            margin-bottom: 16px;
+        }
+        .box code {
+            display: block;
+            margin-bottom: 12px;
+            padding: 8px 12px;
+            background-color: #0d1117;
+            border: 1px solid #30363d;
+            color: #e6edf3;
+        }
+        .box code:last-child {
+            margin-bottom: 0;
+        }
+        table {
+            width: 100%;
+            border-collapse: separate;
+            border-spacing: 0;
+            margin: 24px 0;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th, td {
+            border-bottom: 1px solid #30363d;
+            border-right: 1px solid #30363d;
+            padding: 12px 16px;
+            text-align: left;
+        }
+        th:last-child, td:last-child {
+            border-right: none;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        th {
+            background-color: #161b22;
+            color: #ffffff;
+            font-weight: 600;
+        }
+        td:first-child code {
+            color: #a5d6ff;
+            background: transparent;
+            padding: 0;
+            font-size: 90%;
+        }
+        .nav {
+            position: absolute;
+            top: 24px;
+            right: 24px;
+            background-color: #238636;
+            color: #ffffff;
+            text-decoration: none;
+            padding: 8px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            border-radius: 6px;
+            transition: background-color 0.2s;
+        }
+        .nav:hover {
+            background-color: #2ea043;
+            text-decoration: none;
+        }
+        footer {
+            margin-top: 80px;
+            color: #484f58;
+            font-size: 12px;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+        @media (max-width: 768px) {
+            .dual {
+                grid-template-columns: 1fr;
+            }
+            .switcher {
+                transform: translate(-50%, -50%) rotate(90deg);
+            }
+            .nav {
+                position: relative;
+                top: 0;
+                right: 0;
+                display: inline-block;
+                margin-bottom: 24px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <a href="index.html" class="nav">TRY ONLINE ↗</a>
+    <header>
+        <span>BYTEBED</span>
+    </header>
+
+    <h1>Embedded Bytebeats</h1>
+    <p>Bytebed is a bytebeat virtual machine designed for embedded microcontrollers like the M5Stack Cardputer. It compiles bytebeat to bytecode and evaluates bytebeat functions on the fly.</p>
+
+    <h1>Dual syntax</h1>
+    <p>The engine supports the classic C-style and stack-based notation for playing the bytebeat. All single expressions follow the common notation. Infix and postfix syntax be mirrored between standard C-like and stack-based notation (using TAB key).</p>
+
+    <div class="dual">
+        <div class="box">
+            <strong>INFIX (C-style)</strong>
+            <code>t * (t >> 8 | t >> 11)</code>
+            <code>a = 3, b = 6; t >> a | t >> b</code>
+            <code>f = (n) => {n*t}; f(1)</code>
+        </div>
+        <div class="switcher">&#8660;</div>
+        <div class="box">
+            <strong>POSTFIX (Stack-based)</strong>
+            <code>t t 8 >> t 11 >> | *</code>
+            <code>3 a = 6 b = t a >> t b >> |</code>
+            <code>(n) { n t * } f = 1 f</code>
+        </div>
+    </div>
+
+    <h1>Floatbeat support</h1>
+    <p>Bytebeat aims to support around 80% of the commonly used Javascript syntax, with some opionated exceptions. Since bytebed is a dual syntax (infix & postfix) language, some tradeoffs exists. Users are encouraged to use map and reduce by not supporting while and for loops. Only arrow functions and ternary clauses are supported. Arrays are cyclic by design and characters return base62 values directly (0-Z).</p>
+
+    <h1>Cardputer support</h1>
+    <p>Bytebeat bytecode virtual machine support running complex bytebeat & floatbeat functions live with the M5Stack cardputers. Bytebed is targeted for M5Stack ESP32 cardputers only (at least for now) for easy & fun experience. Support playing bytebeat live with our friends by syncing with multiple cardputers using ESP-NOW protocol. Also works as a programmable MIDI synth using USB-MIDI.</p>
+    
+    <h1>How to use?</h1>
+    <p>Install from M5Burner or Compile the <a href="https://github.com/amiika/bytebed">source</a> and flash to cardputer using <a href="https://platformio.org/">platform.io</a></p>
+
+    <h3>Dont have cardputer?</h3>
+    <p>If you are eager to try, you can also run the bytebed compiler emulator <a href="index.html">in the browser.</a></p>
+
+    <footer>BYTEBED - monkeypatcher - 2026</footer>
+</body>
+</html>

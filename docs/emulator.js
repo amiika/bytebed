@@ -692,7 +692,7 @@ function checkURLParams() {
             formulaInput.value = decoded;
             
             is_rpn = (mode === 'r');
-            modeBtn.innerText = is_rpn ? "RPN" : "INFIX";
+            modeBtn.innerText = is_rpn ? "STACK" : "INFIX";
             
             if (fmt === 'f') {
                 isFloatbeat = true;
@@ -771,7 +771,7 @@ function toggleMode(e) {
     if (!wasm) return;
     if (compile(formulaInput.value)) {
         is_rpn = !is_rpn;
-        modeBtn.innerText = is_rpn ? "RPN" : "INFIX";
+        modeBtn.innerText = is_rpn ? "STACK" : "INFIX";
         const translated = getDecompiledText(is_rpn);
         if (translated) { formulaInput.value = translated; autoExpand(); }
         if (wasm.wasm_reset_vm) wasm.wasm_reset_vm();
