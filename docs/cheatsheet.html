@@ -142,7 +142,7 @@
     <div class="grid-two-col">
         <div>
             <div class="section-header"><h3>1. TIME</h3></div>
-            <p>Bytebeat outputs unsigned 8-bit audio at 8000Hz. The variable <b>t</b> increments by 1 for every sample. The environment truncates output to 8 bits, values above 255 wrap back to 0 creating a sawtooth wave.</p>
+            <p>Bytebeat¹ outputs unsigned 8-bit audio at 8000Hz. The variable <b>t</b> increments by 1 for every sample. The environment truncate output to 8 bits, values above 255 wrap back to 0 creating a sawtooth wave. </p>
             <table>
                 <thead><tr><th>Integer</th><th>Binary</th><th>Truncated</th><th>Decimal</th></tr></thead>
                 <tbody class="mono">
@@ -263,6 +263,10 @@
             </div>
         </div>
     </div>
+    <div class="section-header" style="margin-top: 1.5rem;"></div>
+    <div class="mono" style="font-size: 0.6rem; display: flex; flex-direction: column; gap: 4px;">
+        <div>[1] <a href="https://countercomplex.blogspot.com/2011/10/algorithmic-symphonies-from-one-line-of.html" target="_blank" class="hover:bg-black hover:text-white">https://countercomplex.blogspot.com/2011/10/algorithmic-symphonies-from-one-line-of.html</a></div>
+    </div>
 </div>
 
 <div id="page-2" class="a4-page">
@@ -380,6 +384,7 @@
                     <h4>Bell Tone</h4>
                     <p>Metallic decay with a complex inharmonic spectrum.</p>
                     <pre class="mono" data-sr="48000" data-mode="floatbeat">b=t%16000,e=exp(-b/2000),sin(b/5+e*4*sin(b/4))*e</pre>
+                </div>
             </div>
         </div>
     </div>
