@@ -9,18 +9,18 @@
 #include "sync.h"
 #include "usb_midi_handler.h"
 
-// --- Global System Configuration ---
+// Global System Configuration
 const bool WIPE_NVRAM = false; 
 const bool FORCE_REWRITE_PRESETS = true;
 
-// --- Global Sync State ---
+// Global Sync State
 bool is_sync_master = false;
 bool is_sync_initialized = false;
 volatile bool pending_code_update = false;
 char pending_code_buffer[2048] = {0};
 uint8_t pending_flags = 0;
 
-// --- UI Visualization Buffer ---
+// UI Visualization Buffer
 #define UI_RING_SIZE 4096
 volatile uint8_t ui_sample_ring[UI_RING_SIZE];
 volatile int32_t ui_t_ring[UI_RING_SIZE];
@@ -29,12 +29,23 @@ uint32_t ui_ring_tail = 0;
 
 FastI2S audioOut;
 
-// --- Native USB MIDI State ---
+// Native USB MIDI State
 USBMidiHandler midiHandler;
 bool usb_midi_enabled = false;
 float current_midi_freq = 440.0f;
 int current_midi_note = 0; 
 TaskHandle_t midiTaskHandle = NULL; 
+
+// Secure State Machine for Confirmations
+enum ConfirmType { CONF_NONE, CONF_BANK, CONF_LOAD_PATCH, CONF_SAVE_PATCH };
+static ConfirmType pending_confirm = CONF_NONE;
+static int confirm_bank = -1;
+static int confirm_slot = -1;
+
+// Backup Buffers for Live Preview
+static String backup_input_buffer = "";
+static int backup_cursor_pos = 0;
+static bool patch_edited = false;
 
 /**
  * @brief Helper to keep the VM 'sr' and 'mn' variables in sync with hardware.
@@ -85,12 +96,14 @@ void midiTask(void *pvParameters) {
 void doEditorInsert(char c) {
     input_buffer = input_buffer.substring(0, cursor_pos) + c + input_buffer.substring(cursor_pos);
     cursor_pos++;
+    patch_edited = true;
 }
 
 void doEditorBackspace() {
     if (cursor_pos > 0) {
         input_buffer.remove(cursor_pos - 1, 1);
         cursor_pos--;
+        patch_edited = true;
     }
 }
 
@@ -112,6 +125,8 @@ void doEditorEnter() {
 
 void doEditorTab() {
     rpn_mode = !rpn_mode;
+    status_msg = rpn_mode ? "STACK" : "INFIX";
+    status_timer = millis() + 1500;
     input_buffer = decompile(rpn_mode);
     cursor_pos = input_buffer.length();
 }
@@ -244,6 +259,62 @@ void processUIRingBuffer() {
 }
 
 /**
+ * Loads a patch from NVRAM/Memory into the active workspace and triggers compilation.
+ * @param bank The target bank index (0-9)
+ * @param slot The target patch slot index (0-9)
+ * @param is_bank_switch True if switching banks (loads slot 1), False if loading a specific slot
+ */
+void executeLoadPatch(int bank, int slot, bool is_bank_switch) {
+    current_bank = bank;
+    int target = is_bank_switch ? 1 : slot;
+    
+    input_buffer = slots[current_bank][target].formula; 
+    current_sample_rate = slots[current_bank][target].sample_rate;
+    current_play_mode = slots[current_bank][target].mode;
+    
+    audioOut.setRate(current_sample_rate);
+    updateRuntimeVars();
+    cursor_pos = input_buffer.length(); 
+    rpn_mode = false; 
+    saveUndo(); 
+    t_raw = 0; 
+    patch_edited = false; 
+    
+    bool valid = compileInfix(input_buffer, false); 
+    bg_sprite.fillScreen(theme.bg);
+    
+    String prefix = is_bank_switch ? 
+        ("B" + String(current_bank) + " P" + String(target) + " ") : 
+        ("LOAD " + String(target) + " @ B" + String(current_bank) + " ");
+        
+    applyCompilationResult(valid, prefix);
+    
+    if (is_sync_master) {
+        broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT);
+        broadcastPlay(0); 
+    }
+}
+
+/**
+ * Scans the current keyboard state to find if a numeric key (0-9) was pressed.
+ * @param st The current M5Cardputer keyboard state struct
+ * @return The integer value of the pressed digit, or -1 if no digit was pressed
+ */
+int getPressedDigit(const Keyboard_Class::KeysState& st) {
+    const char* ctrl_symbols = ")!@#$%^&*("; 
+    
+    for (auto c : st.word) {
+        for (int i = 0; i < 10; i++) {
+            if (c == ctrl_symbols[i] || c == '0' + i) return i;
+        }
+    }
+    for (int i = 0; i < 10; i++) {
+        if (M5Cardputer.Keyboard.isKeyPressed('0' + i)) return i;
+    }
+    return -1;
+}
+
+/**
  * Core 0 UI/Input Task. Handles Keyboard, IMU, Screen, and Networking.
  * @param pvParameters FreeRTOS task params
  */
@@ -263,6 +334,7 @@ void uiTask(void *pvParameters) {
         if (pending_code_update) {
             input_buffer = String((char*)pending_code_buffer);
             cursor_pos = input_buffer.length();
+            patch_edited = true;
             
             rpn_mode = (pending_flags & 1) != 0;
             current_play_mode = (pending_flags & 2) != 0 ? MODE_FLOATBEAT : MODE_BYTEBEAT;
@@ -297,164 +369,154 @@ void uiTask(void *pvParameters) {
         
         auto st = M5Cardputer.Keyboard.keysState();
         
-        // --- Status Bar UI Logic ---
-        if (st.opt) snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
+        // Status bar logic with confirmations
+        if (pending_confirm == CONF_BANK) {
+            snprintf(current_top_text, 63, "BANK %d: %s", confirm_bank, String(bankNames[confirm_bank]));
+            status_msg = patch_edited ? "UNSAVED - OK?" : "";
+            status_timer = millis() + 1000;
+        } else if (pending_confirm == CONF_LOAD_PATCH) {
+            snprintf(current_top_text, 63, "PATCH %d PREVIEW", confirm_slot);
+            status_msg = patch_edited ? "UNSAVED - OK?" : "";
+            status_timer = millis() + 1000;
+        } else if (pending_confirm == CONF_SAVE_PATCH) {
+            snprintf(current_top_text, 63, "PATCH %d", confirm_slot);
+            status_msg = "OVERWRITE "+String(confirm_slot)+"?";
+            status_timer = millis() + 1000;
+        } else if (st.opt) snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
         else if (st.alt) snprintf(current_top_text, 63, "B%d SAVE: 0-9", current_bank);
         else if (st.ctrl) snprintf(current_top_text, 63, "SWITCH BANK: 0-9");
         else if (st.fn) strncpy(current_top_text, "FN: W/T/S/F/L/M/P/R/Arr", 63); 
         else strncpy(current_top_text, "BYTEBED", 63); 
         current_top_text[63] = '\0'; 
 
-        // --- Main Keyboard Logic ---
         if (M5Cardputer.Keyboard.isChange() && M5Cardputer.Keyboard.isPressed()) {
             
             const char* ctrl_symbols = ")!@#$%^&*("; 
 
-            // 1. SYSTEM COMMANDS & BANK SWITCHING (CTRL)
-            if (st.ctrl) {
+            if (pending_confirm != CONF_NONE) {
+                bool enterPressed = false;
+                if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) && !st.ctrl) enterPressed = true;
+                if (!patch_edited && pending_confirm != CONF_SAVE_PATCH) enterPressed = true;
 
-                // Bank switching logic
-                bool bankChanged = false;
-                int target_bank = -1;
+                // Fast browsing
+                int new_digit = (st.ctrl || st.opt || st.alt) ? getPressedDigit(st) : -1;
+                
+                if (new_digit != -1) {
+                    int current_target = (pending_confirm == CONF_BANK) ? confirm_bank : confirm_slot;
+                    if (new_digit == current_target) {
+                        enterPressed = true; // Press again to confirm
+                    } else {
+                    if (st.ctrl && pending_confirm == CONF_BANK) confirm_bank = new_digit;
+                    else if (st.opt && pending_confirm == CONF_LOAD_PATCH) confirm_slot = new_digit;
+                    else if (st.alt && pending_confirm == CONF_SAVE_PATCH) confirm_slot = new_digit;
+                    else enterPressed = false;
 
-                for (auto c : st.word) {
-                    for (int i = 0; i < 10; i++) {
-                        if (c == ctrl_symbols[i] || c == '0' + i) {
-                            target_bank = i;
-                            bankChanged = true;
-                        }
-                    }
-                }
-
-                if (!bankChanged) {
-                    for (int i = 0; i < 10; i++) {
-                        if (M5Cardputer.Keyboard.isKeyPressed('0' + i)) {
-                            target_bank = i;
-                            bankChanged = true;
-                        }
-                    }
-                }
-
-                if (bankChanged) {
-                    current_bank = target_bank;
-                    int target_patch = 1;
-                    input_buffer = slots[current_bank][target_patch].formula; 
-                    current_sample_rate = slots[current_bank][target_patch].sample_rate;
-                    current_play_mode = slots[current_bank][target_patch].mode;
-                    audioOut.setRate(current_sample_rate);
-                    updateRuntimeVars();
-                    cursor_pos = input_buffer.length(); 
-                    rpn_mode = false; 
-                    saveUndo(); 
-                    t_raw = 0; 
-                    
-                    bool valid = compileInfix(input_buffer, false); 
-                    bg_sprite.fillScreen(theme.bg);
-                    applyCompilationResult(valid, "B" + String(current_bank) + " P" + String(target_patch) + " ");
-                    
-                    if (is_sync_master) {
-                        broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT);
-                        broadcastPlay(0); 
-                    }
-                } else {
-                    if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
-                        int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
-                        if (undo_stack[prev] != "") { 
-                            undo_ptr = prev; 
-                            input_buffer = undo_stack[undo_ptr]; 
-                            cursor_pos = input_buffer.length(); 
-                        } 
-                    }
-                    if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
-                        if (undo_ptr != undo_max) { 
-                            undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
-                            input_buffer = undo_stack[undo_ptr]; 
-                            cursor_pos = input_buffer.length(); 
-                        } 
-                    }
-                }
-            } 
-            
-            // 2. LOAD PATCH (OPT + 0-9)
-            else if (st.opt && !st.shift) {
-                bool patchLoaded = false;
-                int target_slot = -1;
-
-                for (auto c : st.word) {
-                    for (int i = 0; i < 10; i++) {
-                        if (c == ctrl_symbols[i] || c == '0' + i) {
-                            target_slot = i;
-                            patchLoaded = true;
-                        }
+                    // Update live preview immediately for the new slot
+                    if (pending_confirm == CONF_BANK) input_buffer = slots[confirm_bank][1].formula;
+                    else input_buffer = slots[current_bank][confirm_slot].formula;
+                    cursor_pos = input_buffer.length();
                     }
                 }
                 
-                if (!patchLoaded) {
-                    for (int i = 0; i < 10; i++) {
-                        if (M5Cardputer.Keyboard.isKeyPressed('0' + i)) {
-                            target_slot = i;
-                            patchLoaded = true;
-                        }
+
+                if (enterPressed) {
+                    if (pending_confirm == CONF_BANK) {
+                        executeLoadPatch(confirm_bank, 1, true);
+                    } 
+                    else if (pending_confirm == CONF_LOAD_PATCH) {
+                        executeLoadPatch(current_bank, confirm_slot, false);
+                    } 
+                    else if (pending_confirm == CONF_SAVE_PATCH) {
+                        slots[current_bank][confirm_slot].formula = rpn_mode ? decompile(false) : backup_input_buffer; 
+                        slots[current_bank][confirm_slot].sample_rate = current_sample_rate;
+                        slots[current_bank][confirm_slot].mode = current_play_mode;
+                        
+                        String keySuffix = String(current_bank) + String(confirm_slot);
+                        String packed = String((int)slots[current_bank][confirm_slot].mode) + "|" + String(current_sample_rate) + "|" + slots[current_bank][confirm_slot].formula;
+                        prefs.putString(("s" + keySuffix).c_str(), packed);
+                        
+                        input_buffer = backup_input_buffer;
+                        cursor_pos = backup_cursor_pos;
+                        
+                        status_msg = "SAVE " + String(confirm_slot) + " @ B" + String(current_bank) + " OK"; 
+                        status_timer = millis() + 1500;
+                    }
+                    pending_confirm = CONF_NONE;
+                } else if (new_digit == -1) {
+                    // Cancel if ANY key is pressed that isn't the active shortcut or Enter
+                    char expectedChar = '0' + ((pending_confirm == CONF_BANK) ? confirm_bank : confirm_slot);
+                    char expectedSymbol = ctrl_symbols[expectedChar - '0'];
+
+                    bool cancel = false;
+                    for (auto i : st.word) {
+                        if (i != expectedChar && i != expectedSymbol) cancel = true;
+                    }
+                    
+                    if (pending_confirm == CONF_BANK && (st.alt || st.opt)) cancel = true;
+                    if (pending_confirm == CONF_LOAD_PATCH && (st.ctrl || st.alt)) cancel = true;
+                    if (pending_confirm == CONF_SAVE_PATCH && (st.ctrl || st.opt)) cancel = true;
+                    
+                    if (st.fn || st.shift || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed('`')) cancel = true;
+
+                    if (cancel) {
+                        input_buffer = backup_input_buffer;
+                        cursor_pos = backup_cursor_pos;
+                        status_msg = "CANCELLED";
+                        status_timer = millis() + 1200;
+                        pending_confirm = CONF_NONE;
                     }
                 }
+                continue; 
+            }
 
-                if (patchLoaded) {
-                    input_buffer = slots[current_bank][target_slot].formula; 
-                    current_sample_rate = slots[current_bank][target_slot].sample_rate;
-                    current_play_mode = slots[current_bank][target_slot].mode;
-                    audioOut.setRate(current_sample_rate);
-                    updateRuntimeVars();
-                    cursor_pos = input_buffer.length(); rpn_mode = false; saveUndo(); t_raw = 0;
-                    
-                    bool valid = compileInfix(input_buffer, false); 
-                    bg_sprite.fillScreen(theme.bg);
-                    applyCompilationResult(valid, "LOAD " + String(target_slot) + " @ B" + String(current_bank) + " ");
-                    
-                    if (is_sync_master) { 
-                        broadcastCode(input_buffer, rpn_mode, current_play_mode == MODE_FLOATBEAT); 
-                        broadcastPlay(0); 
-                    }
-                }
-            } 
-            
-            // 3. SAVE PATCH (ALT + 0-9)
-            else if (st.alt && !st.shift) {
-                bool patchSaved = false;
-                int target_slot = -1;
+            int pressed_digit = getPressedDigit(st);
 
-                for (auto c : st.word) {
-                    for (int i = 0; i < 10; i++) {
-                        if (c == ctrl_symbols[i] || c == '0' + i) {
-                            target_slot = i;
-                            patchSaved = true;
-                        }
-                    }
+            // 1. SETUP PENDING CONFIRMATIONS (CTRL, OPT, ALT + 0-9)
+            if (pressed_digit != -1 && (st.ctrl || (st.opt && !st.shift) || (st.alt && !st.shift))) {
+                
+                // Snapshot the current workspace before previewing
+                backup_input_buffer = input_buffer;
+                backup_cursor_pos = cursor_pos;
+                
+                if (st.ctrl) {
+                    pending_confirm = CONF_BANK;
+                    confirm_bank = pressed_digit;
+                    input_buffer = slots[confirm_bank][1].formula; // Live preview target
+                } else if (st.opt && !st.shift) {
+                    pending_confirm = CONF_LOAD_PATCH;
+                    confirm_slot = pressed_digit;
+                    input_buffer = slots[current_bank][confirm_slot].formula; // Live preview target
+                } else if (st.alt && !st.shift) {
+                    pending_confirm = CONF_SAVE_PATCH;
+                    confirm_slot = pressed_digit;
+                    input_buffer = slots[current_bank][confirm_slot].formula; // Preview what will be overwritten
                 }
                 
-                if (!patchSaved) {
-                    for (int i = 0; i < 10; i++) {
-                        if (M5Cardputer.Keyboard.isKeyPressed('0' + i)) {
-                            target_slot = i;
-                            patchSaved = true;
-                        }
-                    }
-                }
-
-                if (patchSaved) {
-                    slots[current_bank][target_slot].formula = rpn_mode ? decompile(false) : input_buffer; 
-                    slots[current_bank][target_slot].sample_rate = current_sample_rate;
-                    slots[current_bank][target_slot].mode = current_play_mode;
-                    
-                    String keySuffix = String(current_bank) + String(target_slot);
-                    String packed = String((int)slots[current_bank][target_slot].mode) + "|" + String(slots[current_bank][target_slot].sample_rate) + "|" + slots[current_bank][target_slot].formula;
-                    prefs.putString(("s" + keySuffix).c_str(), packed);
-                    
-                    status_msg = "SAVE " + String(target_slot) + " @ B" + String(current_bank) + " OK"; 
-                    status_timer = millis() + 1500;
-                }
+                cursor_pos = input_buffer.length();
             } 
             
-            // 4. FN COMMANDS
+            // 2. SYSTEM COMMANDS (CTRL without numbers)
+            else if (st.ctrl) {
+                if (M5Cardputer.Keyboard.isKeyPressed('z') || M5Cardputer.Keyboard.isKeyPressed('Z')) { 
+                    int prev = (undo_ptr - 1 + UNDO_DEPTH) % UNDO_DEPTH; 
+                    if (undo_stack[prev] != "") { 
+                        undo_ptr = prev; 
+                        input_buffer = undo_stack[undo_ptr]; 
+                        cursor_pos = input_buffer.length(); 
+                        patch_edited = true;
+                    } 
+                }
+                if (M5Cardputer.Keyboard.isKeyPressed('y') || M5Cardputer.Keyboard.isKeyPressed('Y')) { 
+                    if (undo_ptr != undo_max) { 
+                        undo_ptr = (undo_ptr + 1) % UNDO_DEPTH; 
+                        input_buffer = undo_stack[undo_ptr]; 
+                        cursor_pos = input_buffer.length(); 
+                        patch_edited = true;
+                    } 
+                }
+            }
+            
+            // 3. FN COMMANDS
             else if (st.fn && !st.shift) {
                 for (auto c : st.word) {
                     if (c == '`') { doEditorClearAll(); }
@@ -472,7 +534,7 @@ void uiTask(void *pvParameters) {
                         status_timer = millis() + 1500;
                     }
                     
-                    // --- SAFE USB STAGGERED BOOT ---
+                    // USB MIDI BOOT
                     if (c == 'm' || c == 'M') {
                         usb_midi_enabled = !usb_midi_enabled;
                         if (usb_midi_enabled) {
@@ -535,7 +597,7 @@ void uiTask(void *pvParameters) {
                 }
             } 
             
-            // 5. STANDARD TYPING
+            // 4. STANDARD TYPING
             else if (!st.ctrl && !st.alt && !st.opt && !st.fn) {
                 bool key_handled = false;
 

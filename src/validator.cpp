@@ -208,6 +208,17 @@ bool validateProgram(uint8_t bank, int len) {
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on RAND at PC " + String(pc));
                 sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; break;
 
+            case OP_PHASE: case OP_ENV: case OP_LFO:
+            case OP_PC: case OP_EUCLID: case OP_ON:
+                if (inst.val > 0) {
+                    if (sp < inst.val - 1) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow at PC " + String(pc));
+                    sp -= (inst.val - 1);
+                } else {
+                    if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow at PC " + String(pc));
+                    sp++; v_stack[sp].type = 0;
+                }
+                break;
+
             case OP_DUP:
                 if (sp < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on DUP at PC " + String(pc));
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on DUP at PC " + String(pc));
@@ -235,6 +246,13 @@ bool validateProgram(uint8_t bank, int len) {
                 if (sp < 1) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on OVER at PC " + String(pc));
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on OVER at PC " + String(pc));
                 sp++; v_stack[sp] = v_stack[sp-2];
+                break;
+
+            case OP_DEFAULT_CHECK:
+                break;
+            case OP_DEFAULT_INJECT:
+                if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on OP_DEFAULT_INJECT at PC " + String(pc));
+                sp++; v_stack[sp].type = 0; v_stack[sp].f = getF(inst.val);
                 break;
 
             case OP_ADD: case OP_SUB: case OP_MUL: case OP_DIV: case OP_MOD:

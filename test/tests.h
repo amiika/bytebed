@@ -173,10 +173,6 @@ String runBytebeatTestSuite() {
         {"0 s",                 0, 128, true,  true},
         {"c(0)",                0, 255, false, true},
         {"0 c",                 0, 255, true,  true},
-        {"f(1.9)",              0,   1, false, true},
-        {"1.9 f",               0,   1, true,  true},
-        {"i(1.9)",              0,   1, false, true},
-        {"1.9 i",               0,   1, true,  true},
         {"r() * 0",             0,   0, false, true},
         {"0 r *",               0,   0, true,  true},
 
@@ -248,9 +244,56 @@ String runBytebeatTestSuite() {
         {"5 10 15 <> @@ ^^ + + +",     0,  40, true,  false}, // 5 10 15 -> 5 15 10 -> 15 10 5 -> 15 10 5 10 -> 40
         {"100 ++ ++ ++ + + +",         0, 144, true,  false}, // quadruple dup: 100*4 = 400. 400 % 256 = 144.
         
-        // Custom macros and functions leveraging stack manipulation
-        {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},  // Custom Forth word using macro
-        {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false}  // Custom Forth word using variables
+        {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},
+        {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false},
+
+        //  MATRIX MATH & PHASE
+        {"v = [1, 2, 3] + [1, 2]; v[0]", 0, 2, false, true},
+        {"v = [1, 2, 3] + [1, 2]; v[3]", 0, 3, false, true},
+        {"v = [1, 2, 3] + [1, 2]; v[5]", 0, 5, false, true},
+        {"v = [10, 20] * 2; v[1]",       0, 40, false, true},
+        {"beat = 1.5; phase(1, 1) * 10", 0, 15, false, false},
+        {"beat = 2.5; phase(1, 2) * 100", 0, 175, false, false},
+        {"beat = 4.0; phase(1.5, 0.5)",   0, 4, false, false},
+
+        // --- 17. SYNTH & MODULATION GENERATORS (NEW) ---
+        {"env(0.5, 1.0, 1.0) * 100",     0, 25, false, false},
+        {"env(0.5, 0.5, 2.0) * 100",     0,  6, false, false},
+        {"lfo(0.25, 0)",               0,  1, false, false},
+        {"lfo(0.5, 2)",                0, 255, false, false},
+        {"pc(0, 0, 60, 1, 12, 440.0) / 100", 0, 2, false, false},
+        {"pc(1, 0, 60, 3, 12, 220.0) / 100", 0, 1, false, false},
+        // Euclid(2, 4, 0) = 160 (10100000)
+        {"euclid(2, 4, 0)",            0, 160, false, false},
+        
+        // Euclid(2, 4, 1) = 80 (01010000) - Rotated by 1
+        {"euclid(2, 4, 1)",            0, 80,  false, false},
+        
+        // Euclid(2, 4, 2) = 40 (00101000) - Rotated by 2
+        {"euclid(2, 4, 2)",            0, 40,  false, false},
+
+        // Test Rotation wrapping: Euclid(2, 4, 4) should equal Euclid(2, 4, 0)
+        {"euclid(2, 4, 4)",            0, 160, false, false},
+
+        // Test non-power-of-two length
+        // Euclid(3, 5, 0) = 10101 -> (21 << 3) = 168 (10101000)
+        {"euclid(3, 5, 0)",            0, 168, false, false},
+
+        // On(160, 0) -> Bit 7 of 10100000 is 1
+        {"on(160, 0)",                 0, 1,   false, false},
+        
+        // On(160, 1) -> Bit 6 of 10100000 is 0
+        {"on(160, 1)",                 0, 0,   false, false},
+        
+        // On(160, 2) -> Bit 5 of 10100000 is 1
+        {"on(160, 2)",                 0, 1,   false, false},
+        {"beat = 0.5; phase(1.0, 1.0) * 10", 0, 5, false, false},
+        {"beat = 3.0; phase(1.5, 1.5) * 10", 0, 20, false, false},
+        {"bpm = 250; beat = 0.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 10, false, false},
+        {"bpm = 250; beat = 0.3; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false},
+        {"bpm = 250; beat = 1.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 30, false, false},
+        {"bpm = 250; beat = 1.5; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 40, false, false},
+        {"bpm = 250; beat = 3.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false}
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);
@@ -260,8 +303,11 @@ String runBytebeatTestSuite() {
         if (!compOk) return "Fail " + String(i+1) + ": Init compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + String(suite[i].expr);
         
         uint8_t res1 = execute_vm(suite[i].t);
-        if (res1 != suite[i].expected) return "Fail " + String(i+1) + ": Init exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res1) + "\nOn:\n" + String(suite[i].expr);
-
+        if (res1 != suite[i].expected) {
+            printf("DEBUG: Test %d [%s] failed at t=%d. Expected: %d, Got: %d\n", 
+                   i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
+            return "FFail " + String(i+1) + ": Init exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res1) + "\nOn:\n" + String(suite[i].expr);
+        }
         if (suite[i].checkRoundTrip) {
             String oppStr = decompile(!suite[i].isRpn);
             bool oppOk = (!suite[i].isRpn) ? compileRPN(oppStr) : compileInfix(oppStr, true);

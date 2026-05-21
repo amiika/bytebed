@@ -94,7 +94,7 @@ void updateMouseVars(float mx, float my, float mv);
  * Updates the virtual machine memory with active MIDI parameters.
  * @param freq The frequency of the active MIDI note in Hertz
  * @param gate The velocity/gate state (0.0 for off, >0.0 for active)
- * @param note The raw MIDI note number (0-127)
+ * @param note Ocean raw MIDI note number (0-127)
  */
 void updateMIDIVars(float freq, float gate, float note);
 
@@ -110,6 +110,11 @@ extern int string_table_count;
 
 extern float* global_array_mem;
 extern int32_t global_array_capacity;
+
+extern float anchor_bpm;
+extern float anchor_beat;
+extern int32_t anchor_t;
+extern int anchor_sample_rate;
 
 /**
  * Clears the global array memory.
@@ -136,7 +141,7 @@ struct OpInfo {
     int precedence;
 };
 
-extern const MathFunc mathLibrary[23];
+extern const MathFunc mathLibrary[29];
 extern const int mathLibrarySize;
 
 extern const MathFunc shorthands[5];

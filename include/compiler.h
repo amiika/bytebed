@@ -67,14 +67,16 @@ struct LambdaCtx {
 void initCompilerState();
 
 /**
- * Checks if a given string pointer represents a lambda definition.
+ * Checks if a given string pointer represents a lambda definition and parses optional defaults.
  * @param p Pointer to the source string
  * @param params Array to store extracted parameter names
+ * @param has_defaults Array pointing out parameter indices with initialized default values
+ * @param default_vals Array containing parsed default fallback variables for validation tracking
  * @param param_cnt Reference to store the parameter count
  * @param consume_len Reference to store the consumed string length
  * @return true if a lambda definition is found, false otherwise
  */
-static bool isLambdaDef(const char* p, String* params, int& param_cnt, int& consume_len);
+static bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len);
 
 /**
  * Parses a compound assignment operator from the input string.

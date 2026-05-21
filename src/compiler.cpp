@@ -9,11 +9,6 @@ extern String last_vm_error;
     #define P_ERR(shortMsg, longMsg) do { last_vm_error = String(shortMsg); return false; } while(0)
 #endif
 
-/**
- * Strips single-line and multi-line comments from the input string while preserving string literals.
- * @param input The raw input formula containing potential comments
- * @return A clean string with all comments removed
- */
 static String stripComments(const String& input) {
     String result = "";
     #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
@@ -104,7 +99,7 @@ bool compileInfix(String input, bool reset_t) {
     String wordBuffer;
 
     #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
-        wordBuffer.reserve(16); // Cardputer optimization
+        wordBuffer.reserve(16); 
     #endif
 
     while (*p) {
@@ -234,10 +229,18 @@ bool compileInfix(String input, bool reset_t) {
                 expect_op = false;
             }
             
-            String params[8]; int param_cnt = 0, consume_len = 0;
-            if (isLambdaDef(p, params, param_cnt, consume_len)) {
+            String params[8]; bool has_defaults[8]; float default_vals[8]; int param_cnt = 0, consume_len = 0;
+            if (isLambdaDef(p, params, has_defaults, default_vals, param_cnt, consume_len)) {
                 int start_pc = len; program_bank[target][len++] = {OP_PUSH_FUNC, 0};
                 LambdaCtx lam; lam.depth = paren_depth; lam.p_cnt = param_cnt; lam.start_pc = start_pc;
+                
+                for (int i = param_cnt - 1; i >= 0; i--) {
+                    if (has_defaults[i]) {
+                        program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(i + 1)};
+                        program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(default_vals[i])};
+                    }
+                }
+                
                 for (int i = param_cnt - 1; i >= 0; i--) {
                     int pid = getVarId(params[i]); lam.p_ids[i] = pid; program_bank[target][len++] = {OP_BIND, (int32_t)pid};
                 }
@@ -274,18 +277,18 @@ bool compileInfix(String input, bool reset_t) {
                                 int expr_len = args_start - expr_start;
                                 int args_len = len - args_start;
                                 
-                                std::unique_ptr<Instruction[]> temp(new Instruction[512]);
-                                memcpy(temp.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
+                                std::unique_ptr<Instruction[]> temp_buf(new Instruction[512]);
+                                memcpy(temp_buf.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
                                 
                                 int ptr = expr_start;
-                                memcpy(&program_bank[target][ptr], &temp[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
-                                memcpy(&program_bank[target][ptr], &temp[0], expr_len * sizeof(Instruction));
+                                memcpy(&program_bank[target][ptr], &temp_buf[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
+                                memcpy(&program_bank[target][ptr], &temp_buf[0], expr_len * sizeof(Instruction));
                             }
                             program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
                         }
                         ot--; 
                     } 
-                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_RAND || os[ot] == OP_LOOP_PREP) {
+                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_PHASE || os[ot] == OP_RAND || os[ot] == OP_LOOP_PREP || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON) {
                         if (os[ot] == OP_LOOP_PREP) {
                             program_bank[target][len++] = {os[ot], (int32_t)os_id[ot]}; 
                             int start_pc = len;
@@ -296,6 +299,8 @@ bool compileInfix(String input, bool reset_t) {
                             program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
                             program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
                             ot--;
+                        } else if (os[ot] == OP_PHASE || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON) {
+                            program_bank[target][len++] = {os[ot--], (int32_t)args}; 
                         } else {
                             program_bank[target][len++] = {os[ot--], 0}; 
                         }
@@ -400,7 +405,7 @@ bool compileInfix(String input, bool reset_t) {
             expect_op = false; 
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); 
             
-            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_LOOP_PREP));
+            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_PHASE || os[ot-1] == OP_LOOP_PREP || os[ot-1] == OP_ENV || os[ot-1] == OP_LFO || os[ot-1] == OP_PC || os[ot-1] == OP_EUCLID || os[ot-1] == OP_ON));
             bool is_array = (bt_ptr >= 0 && bracket_types[bt_ptr] == 1);
             if (is_func_call) call_arg_counts[cac_ptr]++; 
             else if (is_array) array_counts[ac_ptr]++; 
@@ -408,11 +413,11 @@ bool compileInfix(String input, bool reset_t) {
             
             p++; 
         }
-        else if (*p == '=' && *(p+1) != '=' && *(p+1) != '>') {
+                else if (*p == '=' && *(p+1) != '=' && *(p+1) != '>') {
             if (len > 0 && program_bank[target][len - 1].op == OP_AT) {
                 len--; os[++ot] = OP_STORE_AT; os_id[ot] = 0; p++; expect_op = false;
             } else {
-                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, OP_ASSIGN_VAR)) P_ERR("ERR: ?=", "Compile Error: Invalid left-hand side in assignment '='");
+                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, OP_ASSIGN_VAR)) P_ERR("ERR: ?=", "Compile Error: Invalid or Reserved: '" + wordBuffer + "='");
                 p++; expect_op = false;
             }
         }
@@ -420,7 +425,7 @@ bool compileInfix(String input, bool reset_t) {
             OpCode compOp;
             int adv = 0;
             if (parseCompoundOperator(p, compOp, adv)) {
-                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, compOp)) P_ERR("ERR: =?", "Compile Error: Invalid left-hand side in compound assignment");
+                if (!applyCompoundAssign(target, len, os.get(), os_id.get(), ot, compOp)) P_ERR("ERR: =?", "Compile Error: Invalid or Reserved: '" + wordBuffer + "='");
                 p += adv; 
                 expect_op = false;
             } else {
@@ -490,8 +495,16 @@ bool compileRPN(String input) {
     
     int block_starts[32]; int bs_ptr = -1;
     int block_params[32][8]; int bp_counts[32]; int bp_ptr = -1;
-    int current_params[8]; int cp_cnt = 0;
+    
+    int current_params[8]; 
+    bool current_has_default[8]; 
+    float current_default_vals[8]; 
+    float current_pending_def_val = 0.0f;
+    bool current_has_pending_def = false;
+    int cp_cnt = 0;
     bool parsing_params = false;
+
+    int compiler_pending_arity = -1;
 
     for (int i = 0; i < tok_cnt; i++) {
         if (len >= 512) P_ERR("ERR: PROG>512", "RPN Error: Program exceeds 512 instructions");
@@ -517,7 +530,11 @@ bool compileRPN(String input) {
         else if (s == "(") {
             bool is_params = false;
             for (int j = i + 1; j < tok_cnt; j++) { if (tokens[j] == ")") { if (j + 1 < tok_cnt && tokens[j+1] == "{") is_params = true; break; } }
-            if (is_params) { cp_cnt = 0; parsing_params = true; } 
+            if (is_params) { 
+                cp_cnt = 0; 
+                parsing_params = true; 
+                current_has_pending_def = false;
+            } 
             else { 
                 if (bs_ptr < 31) block_starts[++bs_ptr] = len; 
                 program_bank[target][len++] = {OP_PUSH_FUNC, 0}; 
@@ -536,7 +553,16 @@ bool compileRPN(String input) {
         else if (s == "{") {
             if (bs_ptr < 31) block_starts[++bs_ptr] = len; 
             program_bank[target][len++] = {OP_PUSH_FUNC, 0};
+            
+            for (int k = cp_cnt - 1; k >= 0; k--) {
+                if (current_has_default[k]) {
+                    program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(k + 1)};
+                    program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(current_default_vals[k])};
+                }
+            }
+            
             for (int k = cp_cnt - 1; k >= 0; k--) program_bank[target][len++] = {OP_BIND, (int32_t)current_params[k]};
+            
             if (bp_ptr < 31) {
                 bp_ptr++; bp_counts[bp_ptr] = cp_cnt;
                 for (int k = 0; k < cp_cnt; k++) block_params[bp_ptr][k] = current_params[k];
@@ -555,7 +581,16 @@ bool compileRPN(String input) {
             if (bas_ptr >= 0) last_completed_arity = block_arity_stack[bas_ptr--];
         }
         else if (s == "=" || s == ":=" || s == "+=" || s == "-=" || s == "*=" || s == "/=" || s == "%=" || s == "&=" || s == "|=" || s == "^=" || s == "<<=" || s == ">>=" || s == "**=") {
-            if (len >= 2 && (program_bank[target][len-1].op == OP_DYN_CALL_IF_FUNC || program_bank[target][len-1].op == OP_DYN_CALL) && program_bank[target][len-2].op == OP_LOAD) {
+            if (parsing_params) {
+                if (s == "=") {
+                    if (cp_cnt > 0 && current_has_pending_def) {
+                        current_has_default[cp_cnt - 1] = true;
+                        current_default_vals[cp_cnt - 1] = current_pending_def_val;
+                        current_has_pending_def = false;
+                    } else P_ERR("ERR: =", "RPN Error: Invalid default value assignment in parameter block");
+                }
+            }
+            else if (len >= 2 && (program_bank[target][len-1].op == OP_DYN_CALL_IF_FUNC || program_bank[target][len-1].op == OP_DYN_CALL) && program_bank[target][len-2].op == OP_LOAD) {
                 int var_id = program_bank[target][len-2].val; 
                 
                 if (s == "=") program_bank[target][len-2].op = OP_STORE; 
@@ -599,7 +634,25 @@ bool compileRPN(String input) {
             } else { str_id = 63; }
             program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
         }
-        else if (parsing_params) { if (cp_cnt < 8) current_params[cp_cnt++] = getVarId(s); }
+        else if (parsing_params) {
+            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1]))) {
+                current_pending_def_val = strtof(s.c_str(), NULL);
+                current_has_pending_def = true;
+            } else {
+                if (cp_cnt < 8) {
+                    current_params[cp_cnt] = getVarId(s);
+                    current_has_default[cp_cnt] = false;
+                    current_default_vals[cp_cnt] = 0.0f;
+                    cp_cnt++;
+                }
+            }
+        }
+        else if (s == ":") {
+            if (len > 0 && program_bank[target][len - 1].op == OP_VAL) {
+                compiler_pending_arity = (int)getF(program_bank[target][len - 1].val);
+                len--; 
+            } else P_ERR("ERR: :", "RPN Error: Invalid arity specifier");
+        }
         else {
             if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1])) || (s.startsWith("-.") && s.length() > 2 && isdigit(s[2]))) {
                 program_bank[target][len++] = {OP_VAL, setF(strtof(s.c_str(), NULL))};
@@ -618,7 +671,11 @@ bool compileRPN(String input) {
             else {
                 bool is_math = false;
                 for (int _m = 0; _m < mathLibrarySize; _m++) {
-                    if (s == mathLibrary[_m].name) { program_bank[target][len++] = {mathLibrary[_m].code, 0}; is_math = true; break; }
+                    if (s == mathLibrary[_m].name) { 
+                        program_bank[target][len++] = {mathLibrary[_m].code, (int32_t)((mathLibrary[_m].code == OP_PHASE || mathLibrary[_m].code == OP_ENV || mathLibrary[_m].code == OP_LFO || mathLibrary[_m].code == OP_PC || mathLibrary[_m].code == OP_EUCLID || mathLibrary[_m].code == OP_ON) ? 1 : 0)}; 
+                        is_math = true; 
+                        break; 
+                    }
                 }
                 
                 if (!is_math && !isVarDefined(s)) {
@@ -641,15 +698,33 @@ bool compileRPN(String input) {
                     if (getOpCode(s, opc)) { program_bank[target][len++] = {opc, 0}; is_math = true; } 
                 }
                 if (!is_math) {
-                    int id = getVarId(s); program_bank[target][len++] = {OP_LOAD, (int32_t)id};
-                    if (id < 64 && rpn_func_arity[id] != -1) program_bank[target][len++] = {OP_DYN_CALL, (int32_t)rpn_func_arity[id]};
-                    else program_bank[target][len++] = {OP_DYN_CALL_IF_FUNC, 0};
+                    int id = getVarId(s);
+                    program_bank[target][len++] = {OP_LOAD, (int32_t)id};
+                    
+                    if (compiler_pending_arity != -1) {
+                        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)compiler_pending_arity};
+                        compiler_pending_arity = -1;
+                    } else if (id < 64 && rpn_func_arity[id] != -1) {
+                        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)rpn_func_arity[id]};
+                    } else {
+                        program_bank[target][len++] = {OP_DYN_CALL_IF_FUNC, 0};
+                    }
+                } else {
+                    if (compiler_pending_arity != -1) {
+                        OpCode top_op = program_bank[target][len - 1].op;
+                        if (top_op == OP_PHASE || top_op == OP_ENV || top_op == OP_LFO || top_op == OP_PC || top_op == OP_EUCLID || top_op == OP_ON || top_op == OP_DYN_CALL) {
+                            program_bank[target][len - 1].val = (int32_t)compiler_pending_arity;
+                        }
+                        compiler_pending_arity = -1;
+                    }
                 }
             }
         }
         if (negate) program_bank[target][len++] = {OP_NEG, 0};
     }
     
+    if (bs_ptr >= 0 || bp_ptr >= 0) P_ERR("ERR: FUNC", "RPN Error: Unmatched function brackets");
+
     if (!validateProgram(target, len)) return false; 
     prog_len_bank[target] = len; active_bank = target; 
     return true;
@@ -665,6 +740,11 @@ void initCompilerState() {
     memset(vars, 0, sizeof(vars)); 
     
     vars[getVarId("t")] = {0, 0}; 
+    vars[getVarId("bpm")] = {0, setF(120.0f)}; 
+    vars[getVarId("sr")] = {0, setF((float)current_sample_rate)};
+    vars[getVarId("tick")] = {0, 0};
+    vars[getVarId("beat")] = {0, 0};
+    vars[getVarId("bar")] = {0, 0};
     vars[getVarId("PI")] = {0, setF(M_PI)};
     vars[getVarId("pi")] = {0, setF(M_PI)};
     vars[getVarId("TAU")] = {0, setF(M_PI * 2.0)};
@@ -684,49 +764,62 @@ void initCompilerState() {
     vars[getVarId("SQRT12")] = {0, setF(M_SQRT1_2)};
 }
 
-/**
- * Checks if a given string pointer represents a lambda definition.
- * @param p Pointer to the source string
- * @param params Array to store extracted parameter names
- * @param param_cnt Reference to store the parameter count
- * @param consume_len Reference to store the consumed string length
- * @return true if a lambda definition is found, false otherwise
- */
-static bool isLambdaDef(const char* p, String* params, int& param_cnt, int& consume_len) {
+static bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len) {
+    const char* start = p;
     if (*p != '(') return false;
-    const char* q = p + 1;
+    p++;
     
-    String curr;
-
-    #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
-        curr.reserve(16); // Cardputer optimization
-    #endif
-
-    while (*q && *q != ')') {
-        if (*q == '(') return false; 
-        if (*q == ',') { 
-            curr.trim(); 
-            if(curr.length()>0 && param_cnt < 8) params[param_cnt++] = curr; 
-            curr = "";
+    param_cnt = 0;
+    while (*p && *p != ')') {
+        while (isspace(*p)) p++;
+        if (*p == ')') break;
+        
+        String paramName = "";
+        while (isalnum(*p) || *p == '_') paramName += *p++;
+        
+        if (paramName.length() > 0) {
+            params[param_cnt] = paramName;
+            has_defaults[param_cnt] = false;
+            default_vals[param_cnt] = 0.0f;
+            
+            while (isspace(*p)) p++;
+            if (*p == '=') {
+                p++;
+                while (isspace(*p)) p++;
+                char* next_p;
+                float val = strtof(p, &next_p);
+                if (next_p > p) {
+                    has_defaults[param_cnt] = true;
+                    default_vals[param_cnt] = val;
+                    p = next_p;
+                } else {
+                    return false;
+                }
+            }
+            param_cnt++;
+        } else {
+            return false;
         }
-        else curr += *q;
-        q++;
+        
+        while (isspace(*p)) p++;
+        if (*p == ',') {
+            p++;
+        } else if (*p != ')') {
+            return false;
+        }
     }
-    if (*q != ')') return false;
-    curr.trim(); if(curr.length()>0 && param_cnt < 8) params[param_cnt++] = curr;
-    q++;
-    while (isspace(*q)) q++;
-    if (*q == '=' && *(q+1) == '>') { consume_len = (q + 2) - p; return true; }
+    
+    if (*p != ')') return false;
+    p++;
+    
+    while (isspace(*p)) p++;
+    if (*p == '=' && *(p+1) == '>') {
+        consume_len = (int)((p + 2) - start);
+        return true;
+    }
     return false;
 }
 
-/**
- * Parses a compound assignment operator from the input string.
- * @param p Pointer to the current character in the source string
- * @param outOp Reference to store the resolved OpCode
- * @param advanceBy Reference to store how many characters to advance
- * @return true if a compound operator is parsed, false otherwise
- */
 static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy) {
     if (p[0] && p[1] == '=') {
         if (p[0] == '+') { outOp = OP_ADD_ASSIGN; advanceBy = 2; return true; }
@@ -744,13 +837,6 @@ static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy) 
     return false;
 }
 
-/**
- * Tokenizes an input string for RPN compilation.
- * @param input The input string to tokenize
- * @param tokens Array to store the resulting tokens
- * @param max_tokens Maximum number of tokens allowed
- * @return The number of tokens parsed
- */
 static int tokenize(const String& input, String* tokens, int max_tokens) {
     int tok_cnt = 0;
     const char* p = input.c_str();
@@ -817,12 +903,6 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
     return tok_cnt;
 }
 
-/**
- * Finds the start index of an expression in the program bank.
- * @param target The target bank index
- * @param end_pc The end program counter index
- * @return The starting program counter index of the expression
- */
 static int get_expr_start(uint8_t target, int end_pc) {
     int stack_need = 1;
     int pc = end_pc;
@@ -839,7 +919,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
 
         if (func_depth == 0) {
             int produces = 1;
-            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) produces = 0;
+            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT) produces = 0;
             else if (op == OP_DUP || op == OP_SWAP) produces = 2;
             else if (op == OP_ROT || op == OP_OVER) produces = 3;
             
@@ -848,7 +928,8 @@ static int get_expr_start(uint8_t target, int end_pc) {
             else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON || op == OP_ROT) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
             else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP || op == OP_LOAD_STR) consumes = 1;
-            else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL) consumes = 0; 
+            else if (op == OP_PHASE || op == OP_ENV || op == OP_LFO || op == OP_PC || op == OP_EUCLID || op == OP_ON) consumes = program_bank[target][pc].val; 
+            else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
@@ -860,19 +941,6 @@ static int get_expr_start(uint8_t target, int end_pc) {
     return pc + 1;
 }
 
-/**
- * Flushes operators from the operator stack to the program bank.
- * @param target The target bank index
- * @param len Reference to the current program length
- * @param os Array of operators
- * @param os_id Array of operator IDs
- * @param ot Reference to the top index of the operator stack
- * @param cond_starts Array of condition start pointers
- * @param cs_ptr Reference to the condition start pointer index
- * @param stopAt The operator to stop flushing at
- * @param minPrec The minimum precedence level to flush
- * @param stopAtMarker Whether to stop at a store marker
- */
 static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt, int minPrec, bool stopAtMarker) {
     while (ot >= 0 && os[ot] != stopAt) {
         if (stopAtMarker && os[ot] == OP_STORE) break;
@@ -917,16 +985,6 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
     }
 }
 
-/**
- * Applies a compound assignment operator dynamically.
- * @param target The target bank index
- * @param len Reference to the current program length
- * @param os Array of operators
- * @param os_id Array of operator IDs
- * @param ot Reference to the top index of the operator stack
- * @param assignOp The compound assignment operator to apply
- * @return true if successfully applied, false otherwise
- */
 static bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp) {
     int load_idx = -1;
     for (int k = len - 1; k >= 0 && k >= len - 10; k--) {

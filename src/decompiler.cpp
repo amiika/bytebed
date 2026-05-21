@@ -39,7 +39,6 @@ String decompileRPN() {
     if (len == 0) return "";
     Instruction* prog = program_bank[active_bank];
     
-    // Pre-pass: Identify which variables are stored as functions
     bool is_func_map[64] = {false};
     bool last_was_ret = false;
     for (int k = 0; k < len; k++) {
@@ -149,23 +148,47 @@ String decompileRPN() {
                 int end_pc = pc + inst.val; 
                 if (fe_ptr < 255) func_ends[++fe_ptr] = end_pc;
                 
-                String params[8]; int param_cnt = 0;
+                String params[8]; 
+                bool has_def[8] = {false};
+                float def_val[8] = {0.0f};
+                int param_cnt = 0;
+                
                 int bind_pc = pc + 1;
-                while (bind_pc < end_pc && prog[bind_pc].op == OP_BIND) {
-                    if (param_cnt < 8) params[param_cnt++] = getVarName(prog[bind_pc].val);
-                    bind_pc++;
+                int total_binds = 0;
+                for(int temp_pc = bind_pc; temp_pc < end_pc; temp_pc++) {
+                    if (prog[temp_pc].op == OP_BIND) total_binds++;
+                    else if (prog[temp_pc].op != OP_DEFAULT_CHECK && prog[temp_pc].op != OP_DEFAULT_INJECT) break;
+                }
+                
+                while (bind_pc < end_pc) {
+                    if (prog[bind_pc].op == OP_DEFAULT_CHECK) {
+                        int p_idx = prog[bind_pc].val - 1;
+                        if (bind_pc + 1 < end_pc && prog[bind_pc+1].op == OP_DEFAULT_INJECT) {
+                            has_def[p_idx] = true;
+                            def_val[p_idx] = getF(prog[bind_pc+1].val);
+                            bind_pc += 2;
+                        } else bind_pc++;
+                    } else if (prog[bind_pc].op == OP_BIND) {
+                        int p_idx = total_binds - 1 - param_cnt;
+                        if (p_idx >= 0 && p_idx < 8) params[p_idx] = getVarName(prog[bind_pc].val);
+                        param_cnt++; bind_pc++;
+                    } else break;
                 }
                 
                 if (param_cnt > 0) {
-                    out += "(";
-                    for (int i = param_cnt - 1; i >= 0; i--) {
-                        out += params[i];
-                        if (i > 0) out += " ";
+                    out += "( ";
+                    for (int i = 0; i < param_cnt; i++) {
+                        if (has_def[i]) {
+                            float v = def_val[i];
+                            if (v == (int32_t)v) out += String((int32_t)v) + " ";
+                            else out += String(v) + " ";
+                        }
+                        out += params[i] + " ";
+                        if (has_def[i]) out += "= ";
                     }
                     out += ") { "; 
-                } else {
-                    out += "{ "; // Clean zero-arity formatting!
-                }
+                } else out += "{ "; 
+                
                 pc = bind_pc - 1; 
                 break;
             }
@@ -177,6 +200,8 @@ String decompileRPN() {
             case OP_RET: 
             case OP_BIND: 
             case OP_UNBIND: 
+            case OP_DEFAULT_CHECK:
+            case OP_DEFAULT_INJECT:
                 break;
             case OP_VEC:
                 out += "_ ";
@@ -216,6 +241,9 @@ String decompileRPN() {
                 break;
             case OP_NEQ:
                 out += "!= ";
+                break;
+            case OP_PHASE: case OP_ENV: case OP_LFO: case OP_PC: case OP_EUCLID: case OP_ON:
+                out += getOpSym(inst.op) + " ";
                 break;
             default:
                 String sym = getOpSym(inst.op);
@@ -354,17 +382,44 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         }
         else if (inst.op == OP_PUSH_FUNC) {
             int target_end = pc + inst.val; 
-            String params[8]; int param_cnt = 0;
+            
+            String params[8];
+            bool has_def[8] = {false};
+            float def_val[8] = {0.0f};
+            int param_cnt = 0;
+            
             int bind_pc = pc + 1;
-            while (bind_pc < target_end && prog[bind_pc].op == OP_BIND) {
-                if (param_cnt < 8) params[param_cnt++] = getVarName(prog[bind_pc].val);
-                bind_pc++;
+            int total_binds = 0;
+            for(int temp_pc = bind_pc; temp_pc < target_end; temp_pc++) {
+                if (prog[temp_pc].op == OP_BIND) total_binds++;
+                else if (prog[temp_pc].op != OP_DEFAULT_CHECK && prog[temp_pc].op != OP_DEFAULT_INJECT) break;
+            }
+            
+            while (bind_pc < target_end) {
+                if (prog[bind_pc].op == OP_DEFAULT_CHECK) {
+                    int p_idx = prog[bind_pc].val - 1;
+                    if (bind_pc + 1 < target_end && prog[bind_pc+1].op == OP_DEFAULT_INJECT) {
+                        has_def[p_idx] = true;
+                        def_val[p_idx] = getF(prog[bind_pc+1].val);
+                        bind_pc += 2;
+                    } else bind_pc++;
+                } else if (prog[bind_pc].op == OP_BIND) {
+                    int p_idx = total_binds - 1 - param_cnt;
+                    if (p_idx >= 0 && p_idx < 8) params[p_idx] = getVarName(prog[bind_pc].val);
+                    param_cnt++; bind_pc++;
+                } else break;
             }
             
             String func_str = "(";
-            for (int i = param_cnt - 1; i >= 0; i--) {
+            for (int i = 0; i < param_cnt; i++) {
                 func_str += params[i];
-                if (i > 0) func_str += ",";
+                if (has_def[i]) {
+                    func_str += "=";
+                    float v = def_val[i];
+                    if (v == (int32_t)v) func_str += String((int32_t)v);
+                    else func_str += String(v);
+                }
+                if (i < param_cnt - 1) func_str += ",";
             }
             func_str += ")=>{";
             
@@ -478,6 +533,29 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                 }
             }
         }
+        else if (inst.op == OP_PHASE || inst.op == OP_ENV || inst.op == OP_LFO || inst.op == OP_PC || inst.op == OP_EUCLID || inst.op == OP_ON) {
+            int args = inst.val;
+            String fn_name = "func";
+            if (inst.op == OP_PHASE) fn_name = "phase";
+            else if (inst.op == OP_ENV) fn_name = "env";
+            else if (inst.op == OP_LFO) fn_name = "lfo";
+            else if (inst.op == OP_PC) fn_name = "pc";
+            else if (inst.op == OP_EUCLID) fn_name = "euclid";
+            else if (inst.op == OP_ON) fn_name = "on";
+            
+            if (args == 0) {
+                if (sp < MAX_STACK - 1) { stack[++sp] = fn_name + "()"; prec_stack[sp] = PREC_MAX; }
+            } else if (sp >= args - 1) {
+                String func_call = fn_name + "(";
+                for (int i = 0; i < args; i++) {
+                    func_call += stack[sp - args + 1 + i];
+                    if (i < args - 1) func_call += ", ";
+                }
+                func_call += ")";
+                sp -= (args - 1);
+                if (sp < MAX_STACK) { stack[sp] = func_call; prec_stack[sp] = PREC_MAX; }
+            }
+        }
         else if ((inst.op >= OP_SIN && inst.op <= OP_ATAN || inst.op == OP_INT) && sp >= 0) { 
              String val = stack[sp--]; 
              String sym = getOpSym(inst.op);
@@ -502,9 +580,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         }
         else if (inst.op == OP_LOOP_EVAL || inst.op == OP_LOOP_DONE || 
                  inst.op == OP_DYN_CALL_IF_FUNC || inst.op == OP_RET || 
-                 inst.op == OP_BIND || inst.op == OP_UNBIND) {
-            // These are structural or execution-deferring opcodes.
-            // They must be explicitly ignored so they do not fall into the binary operator block below.
+                 inst.op == OP_BIND || inst.op == OP_UNBIND || inst.op == OP_DEFAULT_CHECK || inst.op == OP_DEFAULT_INJECT) {
         }
         else if (sp >= 1) {
             String right = stack[sp]; int rp = prec_stack[sp]; sp--;
@@ -554,7 +630,6 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         
         if (top_item.length() > 0) {
             char first = top_item[0];
-            // Only format as a function if it starts with a letter, & or _ and contains alphanumerics
             if (isalpha(first) || first == '&' || first == '_') {
                 looks_like_func = true;
                 for (size_t i = 1; i < top_item.length(); i++) {
@@ -567,8 +642,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             }
         }
         
-        // Prevent reserved global math constants from being formatted as functions
-        if (top_item == "t" || top_item == "PI" || top_item == "E" || top_item == "TAU" || top_item == "pi" || top_item == "tau") {
+        if (top_item == "t" || top_item == "PI" || top_item == "E" || top_item == "TAU" || top_item == "pi" || top_item == "tau" || top_item == "step") {
             looks_like_func = false;
         }
         
