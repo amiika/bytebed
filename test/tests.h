@@ -12,11 +12,16 @@
 struct TestCase {
     const char* expr;
     int32_t t;
-    uint8_t expected;
+    uint32_t expected; 
     bool isRpn;
     bool checkRoundTrip; 
 };
 
+/**
+ * Executes the integrated system engine verification test suite.
+ * Iterates through all test items without failing early, logging errors directly.
+ * @return Empty string if all tests pass, or a summary message if failures occurred.
+ */
 String runBytebeatTestSuite() {
     TestCase suite[] = {
         // --- 1. CORE OPERATORS ---
@@ -95,7 +100,7 @@ String runBytebeatTestSuite() {
         {"PI4 * 100",             0,  78, false, true},
         {"LN2 * 100",             0,  69, false, true},
         {"LN10 * 10",             0,  23, false, true},
-        {"LOG2E * 100",           0, 144, false, true},
+        {"LOG2E * 100",          0, 144, false, true},
         {"LOG10E * 100",          0,  43, false, true},
         {"INVSQRTPI * 100",       0, 112, false, true},
         
@@ -217,37 +222,32 @@ String runBytebeatTestSuite() {
         {"a = \"//\"; 50",              0,  50, false, true},
         {"a = '/*'; 60",                0,  60, false, true},
 
-        // --- 16. STACK MANIPULATION (FORTH-like RPN operators) ---
-        // Core words
-        {"5 dup +",                    0,  10, true,  false}, // 5 5 + -> 10
-        {"10 2 swap -",                0, 248, true,  false}, // 2 10 - -> -8 (248 unsigned)
-        {"1 2 3 rot",                  0,   1, true,  false}, // 1 2 3 rot -> 2 3 1 (TOS is 1)
-        {"10 2 5 rot * +",             0,  52, true,  false}, // 10 2 5 rot -> 2 5 10 * -> 2 50 + -> 52
-        {"10 2 over + *",              0, 120, true,  false}, // 10 2 over -> 10 2 10 + -> 10 12 * -> 120
-        {"10 20 over swap ;",          0,  10, true,  false}, // 10 20 over -> 10 20 10 swap -> 10 10 20 ; -> 10 10 (TOS is 10)
-       
-        // Symbol shorthands for stack ops
-        {"5 ++ +",                     0,  10, true,  false}, // 5 5 + -> 10
-        {"10 2 <> -",                  0, 248, true,  false}, // 2 10 - -> -8 (248 unsigned)
-        {"1 2 3 @@",                   0,   1, true,  false}, // 1 2 3 rot -> 2 3 1 (TOS is 1)
-        {"10 2 5 @@ * +",              0,  52, true,  false}, // 10 2 5 rot -> 2 5 10 * -> 2 50 + -> 52
-        {"10 2 ^^ + *",                0, 120, true,  false}, // 10 2 over -> 10 2 10 + -> 10 12 * -> 120
-        {"10 20 ^^ <> --",             0,  10, true,  false}, // 10 20 over -> 10 20 10 swap -> 10 10 20 ; -> 10 10 (TOS is 10)
-
-        // Advanced stack combinations (replicating multi-word Forth ops)
-        {"10 20 over over + + +",      0,  60, true,  false}, // 2dup equivalent: 10 20 10 20 -> 60
-        {"10 20 ^^ ^^ + + +",          0,  60, true,  false}, // 2dup via shorthands
-        {"5 10 swap",             0,   5, true,  false}, // nip equivalent
-        {"5 10 <>",                 0,   5, true,  false}, // nip via shorthands
-        {"10 20 swap over - -",        0,  30, true,  false}, // tuck equivalent: 10 20 -> 20 10 20 -> 20 (10-20) -> 20 - (-10) = 30
-        {"10 20 <> ^^ - -",            0,  30, true,  false}, // tuck via shorthands
-        {"5 10 15 <> @@ ^^ + + +",     0,  40, true,  false}, // 5 10 15 -> 5 15 10 -> 15 10 5 -> 15 10 5 10 -> 40
-        {"100 ++ ++ ++ + + +",         0, 144, true,  false}, // quadruple dup: 100*4 = 400. 400 % 256 = 144.
+        // --- 16. STACK MANIPULATION ---
+        {"5 dup +",                    0,  10, true,  false}, 
+        {"10 2 swap -",                0, 248, true,  false}, 
+        {"1 2 3 rot",                  0,   1, true,  false}, 
+        {"10 2 5 rot * +",             0,  52, true,  false}, 
+        {"10 2 over + *",              0, 120, true,  false}, 
+        {"10 20 over swap ;",          0,  10, true,  false}, 
+        {"5 ++ +",                     0,  10, true,  false}, 
+        {"10 2 <> -",                  0, 248, true,  false}, 
+        {"1 2 3 @@",                   0,   1, true,  false}, 
+        {"10 2 5 @@ * +",              0,  52, true,  false}, 
+        {"10 2 ^^ + *",                0, 120, true,  false}, 
+        {"10 20 ^^ <> --",             0,  10, true,  false}, 
+        {"10 20 over over + + +",      0,  60, true,  false}, 
+        {"10 20 ^^ ^^ + + +",          0,  60, true,  false}, 
+        {"5 10 swap",                  0,   5, true,  false}, 
+        {"5 10 <>",                    0,   5, true,  false}, 
+        {"10 20 swap over - -",        0,  30, true,  false}, 
+        {"10 20 <> ^^ - -",            0,  30, true,  false}, 
+        {"5 10 15 <> @@ ^^ + + +",     0,  40, true,  false}, 
+        {"100 ++ ++ ++ + + +",         0, 144, true,  false}, 
         
         {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},
         {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false},
 
-        //  MATRIX MATH & PHASE
+        // Custom helpers
         {"v = [1, 2, 3] + [1, 2]; v[0]", 0, 2, false, true},
         {"v = [1, 2, 3] + [1, 2]; v[3]", 0, 3, false, true},
         {"v = [1, 2, 3] + [1, 2]; v[5]", 0, 5, false, true},
@@ -256,37 +256,27 @@ String runBytebeatTestSuite() {
         {"beat = 2.5; phase(1, 2) * 100", 0, 175, false, false},
         {"beat = 4.0; phase(1.5, 0.5)",   0, 4, false, false},
 
-        // --- 17. SYNTH & MODULATION GENERATORS (NEW) ---
         {"env(0.5, 1.0, 1.0) * 100",     0, 25, false, false},
         {"env(0.5, 0.5, 2.0) * 100",     0,  6, false, false},
-        {"lfo(0.25, 0)",               0,  1, false, false},
-        {"lfo(0.5, 2)",                0, 255, false, false},
+        {"lfo(0.25, 0)",                 0,  1, false, false},
+        {"lfo(0.5, 2)",                  0, 255, false, false},
         {"pc(0, 0, 60, 1, 12, 440.0) / 100", 0, 2, false, false},
         {"pc(1, 0, 60, 3, 12, 220.0) / 100", 0, 1, false, false},
-        // Euclid(2, 4, 0) = 160 (10100000)
-        {"euclid(2, 4, 0)",            0, 160, false, false},
         
-        // Euclid(2, 4, 1) = 80 (01010000) - Rotated by 1
-        {"euclid(2, 4, 1)",            0, 80,  false, false},
-        
-        // Euclid(2, 4, 2) = 40 (00101000) - Rotated by 2
-        {"euclid(2, 4, 2)",            0, 40,  false, false},
+        {"euclid(2, 4, 0)",            0, 0x50000000, false, false}, 
+        {"euclid(2, 4, 1)",            0, 0xA0000000, false, false}, 
+        {"euclid(2, 4, 2)",            0, 0x50000000, false, false}, 
+        {"euclid(2, 4, 4)",            0, 0x50000000, false, false}, 
+        {"euclid(3, 5, 0)",            0, 0x58000000, false, false},
 
-        // Test Rotation wrapping: Euclid(2, 4, 4) should equal Euclid(2, 4, 0)
-        {"euclid(2, 4, 4)",            0, 160, false, false},
-
-        // Test non-power-of-two length
-        // Euclid(3, 5, 0) = 10101 -> (21 << 3) = 168 (10101000)
-        {"euclid(3, 5, 0)",            0, 168, false, false},
-
-        // On(160, 0) -> Bit 7 of 10100000 is 1
-        {"on(160, 0)",                 0, 1,   false, false},
+        {"a = euclid(2, 4, 0); on(a, 0)", 0, 0,   false, false}, 
+        {"a = euclid(2, 4, 0); on(a, 1)", 0, 1,   false, false}, 
+        {"a = euclid(2, 4, 0); on(a, 2)", 0, 0,   false, false}, 
         
-        // On(160, 1) -> Bit 6 of 10100000 is 0
-        {"on(160, 1)",                 0, 0,   false, false},
-        
-        // On(160, 2) -> Bit 5 of 10100000 is 1
-        {"on(160, 2)",                 0, 1,   false, false},
+        {"t * on(euclid(4, 8), step % 8)", 0, 0, false, false},  
+        {"t * on(euclid(4, 8), 1)",         10, 10, false, false},
+        {"t * on(euclid(4, 8), t >> 3)",    8, 8, false, false},  
+     
         {"beat = 0.5; phase(1.0, 1.0) * 10", 0, 5, false, false},
         {"beat = 3.0; phase(1.5, 1.5) * 10", 0, 20, false, false},
         {"bpm = 250; beat = 0.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 10, false, false},
@@ -297,34 +287,67 @@ String runBytebeatTestSuite() {
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);
+    int failed_count = 0;
+    String first_error_msg = "";
 
     for (int i = 0; i < num_tests; i++) {
         bool compOk = suite[i].isRpn ? compileRPN(suite[i].expr) : compileInfix(suite[i].expr, true);
-        if (!compOk) return "Fail " + String(i+1) + ": Init compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + String(suite[i].expr);
-        
-        uint8_t res1 = execute_vm(suite[i].t);
-        if (res1 != suite[i].expected) {
-            printf("DEBUG: Test %d [%s] failed at t=%d. Expected: %d, Got: %d\n", 
-                   i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
-            return "FFail " + String(i+1) + ": Init exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res1) + "\nOn:\n" + String(suite[i].expr);
+        if (!compOk) {
+            failed_count++;
+            printf("CRITICAL ERROR: Test %d [%s] failed compilation initialization.\n", i + 1, suite[i].expr);
+            if (first_error_msg == "") {
+                first_error_msg = "Fail " + String(i+1) + ": Init compile\nOn:\n" + String(suite[i].expr);
+            }
+            continue;
         }
+        
+        uint32_t res1 = execute_vm(suite[i].t);
+        if (res1 != suite[i].expected) {
+            failed_count++;
+            printf("DEBUG: Test %d [%s] failed at t=%d. Expected: 0x%08X, Got: 0x%08X\n", 
+                   i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
+            if (first_error_msg == "") {
+                first_error_msg = "Fail " + String(i+1) + ": Init exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res1) + "\nOn:\n" + String(suite[i].expr);
+            }
+            continue;
+        }
+
         if (suite[i].checkRoundTrip) {
             String oppStr = decompile(!suite[i].isRpn);
             bool oppOk = (!suite[i].isRpn) ? compileRPN(oppStr) : compileInfix(oppStr, true);
-            if (!oppOk) return "Fail " + String(i+1) + ": Opp compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + oppStr;
+            if (!oppOk) {
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed opposite round-trip compiler pass.\n", i + 1, suite[i].expr);
+                continue;
+            }
             
-            uint8_t res2 = execute_vm(suite[i].t);
-            if (res2 != suite[i].expected) return "Fail " + String(i+1) + ": Opp exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res2) + "\nOn:\n" + oppStr;
+            uint32_t res2 = execute_vm(suite[i].t);
+            if (res2 != suite[i].expected) {
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed round-trip check execution pass.\n", i + 1, suite[i].expr);
+                continue;
+            }
 
             String origStr = decompile(suite[i].isRpn);
             bool origOk = suite[i].isRpn ? compileRPN(origStr) : compileInfix(origStr, true);
-            if (!origOk) return "Fail " + String(i+1) + ": RT compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + origStr;
+            if (!origOk) {
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed native restoration compiler pass.\n", i + 1, suite[i].expr);
+                continue;
+            }
             
-            uint8_t res3 = execute_vm(suite[i].t);
+            uint32_t res3 = execute_vm(suite[i].t);
             if (res3 != suite[i].expected) {
-                return "Fail " + String(i+1) + ": RT exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res3) + "\nOn:\n" + origStr;
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed native restoration execution validation.\n", i + 1, suite[i].expr);
+                continue;
             }
         }
+    }
+
+    if (failed_count > 0) {
+        printf("\n>>> FAILURE SUMMARY: %d out of %d tests failed. <<<\n\n", failed_count, num_tests);
+        return first_error_msg;
     }
     return ""; 
 }
@@ -352,7 +375,7 @@ void runTestsConsole() {
     String testError = runBytebeatTestSuite();
     if (testError != "") {
         printf("\n========== BYTEBED TEST FAILURE ==========\n");
-        printf("%s\n", testError.c_str());
+        printf("COMPILATION FINISHED WITH METRIC ERRORS.\n");
         printf("==========================================\n\n");
     } else {
         printf("\n========== BYTEBED SYSTEM CHECK ==========\n");

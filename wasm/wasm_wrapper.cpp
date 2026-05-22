@@ -48,9 +48,9 @@ extern "C" {
     /**
      * Executes the virtual machine for a given discrete time step.
      * @param t Absolute time step index
-     * @return Resulting audio sample byte
+     * @return Resulting 32-bit audio sample stream word or mask
      */
-    EMSCRIPTEN_KEEPALIVE uint8_t wasm_execute(int32_t t) {
+    EMSCRIPTEN_KEEPALIVE uint32_t wasm_execute(int32_t t) {
         return execute_vm(t);
     }
 
@@ -126,7 +126,7 @@ extern "C" {
     }
 
     /**
-     * Fetches a formula string from the C++ preset banks.
+     * Evaluates a formula string from the C++ preset banks.
      * @param bank Bank index (0-9)
      * @param patch Patch index (0-9)
      * @return Pointer to the formula string

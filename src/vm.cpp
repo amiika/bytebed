@@ -2,6 +2,10 @@
 #include "fast_math.h"
 #include <algorithm>
 
+/**
+ * @struct MathFunc
+ * Describes a built-in mathematical function or shorthand operator mapping.
+ */
 const MathFunc mathLibrary[] = {
     {"sin",   OP_SIN,   true},  {"cos",   OP_COS,   true},  {"tan",   OP_TAN,   true},
     {"sqrt",  OP_SQRT,  true},  {"log",   OP_LOG,   true},  {"exp",   OP_EXP,   true},
@@ -69,6 +73,20 @@ int anchor_sample_rate = 8000;
 constexpr int MAX_LOCAL_ARRAY = 1024;
 float local_array_mem[MAX_LOCAL_ARRAY];
 int local_array_ptr = 0;
+
+volatile int32_t alloc_requested_size = 0;
+volatile bool alloc_request_pending = false;
+
+// SELF-HEALING SYSTEM CACHE: Prevents test harness/patch switch collisions natively
+static int cached_t_var_id = -1;
+static int cached_i_sr      = -1;
+static int cached_i_bpm     = -1;
+static int cached_i_step    = -1;
+static int cached_i_beat    = -1;
+static int cached_i_bar     = -1;
+static int cached_i_steps   = -1;
+static bool sys_indices_initialized = false;
+static int cache_epoch_var_count = -1;
 
 #if defined(ESP32)
 DRAM_ATTR Val vm_stack[512]; 
@@ -151,6 +169,24 @@ int getVarId(const String& name) {
     if (var_count >= 63) return 63; 
     symNames[var_count] = name;
     return var_count++;
+}
+
+/**
+ * Ensures system variable indices are cached efficiently, auto-invalidating 
+ * if external processes clear the global variable table.
+ */
+static inline void init_system_indices() {
+    if (__builtin_expect(!sys_indices_initialized || var_count < cache_epoch_var_count, 0)) {
+        cached_t_var_id = getVarId("t");
+        cached_i_sr      = getVarId("sr");
+        cached_i_bpm     = getVarId("bpm");
+        cached_i_step    = getVarId("step");
+        cached_i_beat    = getVarId("beat");
+        cached_i_bar     = getVarId("bar");
+        cached_i_steps   = getVarId("steps");
+        sys_indices_initialized = true;
+    }
+    cache_epoch_var_count = var_count;
 }
 
 /**
@@ -282,15 +318,16 @@ static Val eval_vector_bin_op(Val lhs, Val rhs, OpCode op) {
 
 /**
  * Executes a block of bytecode for audio generation.
- * @param start_t The starting time step
+ * @param start_t The starting time step (allows fractional alignment)
+ * @param t_step The timeline increment per sample
  * @param length The number of samples to generate
  * @param out_buf The output buffer to write to
  */
-void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
+void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_t* out_buf) {
     uint8_t bank = active_bank; 
     int len = prog_len_bank[bank];
     bool is_bb = (current_play_mode == MODE_BYTEBEAT);
-    if (len == 0) { memset(out_buf, 128, length); return; }
+    if (len == 0) { memset(out_buf, 128, length * sizeof(uint32_t)); return; }
 
     static const void* dispatch_table[] = {
         &&L_OP_VAL, &&L_OP_T, &&L_OP_LOAD, &&L_OP_STORE, &&L_OP_STORE_KEEP, &&L_OP_POP,
@@ -318,22 +355,26 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
     };
 
     Instruction* prog = program_bank[bank];
-    int t_var_id = getVarId("t");
-    int i_sr = getVarId("sr");
-    int i_bpm = getVarId("bpm");
-    int i_step = getVarId("step");
-    int i_beat = getVarId("beat");
-    int i_bar = getVarId("bar");
-    int i_steps = getVarId("steps"); // <-- Look for "steps" (Steps per bar)
+    
+    // Completely encapsulated system tracking
+    init_system_indices();
 
-    // Initialize a standard 16-step grid fallback if undefined
+    int t_var_id = cached_t_var_id;
+    int i_sr     = cached_i_sr;
+    int i_bpm    = cached_i_bpm;
+    int i_step   = cached_i_step;
+    int i_beat   = cached_i_beat;
+    int i_bar    = cached_i_bar;
+    int i_steps  = cached_i_steps; 
+
     if (vars[i_steps].f == 0.0f) {
         vars[i_steps].type = 0;
-        vars[i_steps].f = 16.0f; // Default to 16 steps per bar
+        vars[i_steps].f = 16.0f; 
     }
 
     for (int sample_idx = 0; sample_idx < length; sample_idx++) {
-        int32_t t = start_t + sample_idx; 
+        // Natively integrated downsampling time tracker
+        float t = start_t + (sample_idx * t_step); 
 
         vars[i_sr].type = 0; 
         vars[i_sr].f = (float)current_sample_rate;
@@ -341,33 +382,27 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         float current_bpm = vars[i_bpm].f;
         if (current_bpm <= 0.01f) current_bpm = 0.01f;
 
-        // --- PREVENT PHANTOM NEGATIVE TIME HISS ---
         if (t < anchor_t) {
-            anchor_t = t;
+            anchor_t = (int32_t)t;
             anchor_beat = 0.0f;
         }
 
         if (current_bpm != anchor_bpm || current_sample_rate != anchor_sample_rate) {
             anchor_beat = anchor_beat + (t - anchor_t) * (anchor_bpm / (60.0f * anchor_sample_rate));
-            anchor_t = t;
+            anchor_t = (int32_t)t;
             anchor_bpm = current_bpm;
             anchor_sample_rate = current_sample_rate;
         }
 
         float current_beat = anchor_beat + (t - anchor_t) * (vars[i_bpm].f / (60.0f * current_sample_rate));
         float current_bar = current_beat / 4.0f;
-
-        // Fetch the grid layout from the script space
         float steps_per_bar = vars[i_steps].f;
-        if (steps_per_bar <= 0.01f) steps_per_bar = 16.0f; // Safety guard clamp
+        if (steps_per_bar <= 0.01f) steps_per_bar = 16.0f; 
 
         vars[i_beat].type = 0; vars[i_beat].f = current_beat;
         vars[i_bar].type  = 0; vars[i_bar].f  = current_bar;
-        
-        // Calculate your sequencer index relative to the bar structure!
         vars[i_step].type = 0; vars[i_step].f = current_bar * steps_per_bar;
-        
-        vars[t_var_id].type = 0; vars[t_var_id].f = (float)t;
+        vars[t_var_id].type = 0; vars[t_var_id].f = t;
 
         local_array_ptr = 0; int sp = -1; int csp = -1; int ssp = -1; loop_sp = -1; 
         Val tos = {0, 0}; 
@@ -376,15 +411,26 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         #define BOING() do { if (++pc >= len) goto L_END; inst = prog[pc]; goto *dispatch_table[(uint8_t)inst.op]; } while(0)
 
         L_OP_VAL: if (sp < 511) vm_stack[++sp] = tos; tos.type = 0; tos.v = inst.val; BOING();
-        L_OP_T:   if (sp < 511) vm_stack[++sp] = tos; tos.type = 0; tos.f = (float)t; BOING();
+        L_OP_T:   if (sp < 511) vm_stack[++sp] = tos; tos.type = 0; tos.f = t; BOING();
         L_OP_LOAD: if (sp < 511) vm_stack[++sp] = tos; tos = vars[inst.val]; BOING();
         L_OP_LOAD_STR: if (sp < 511) vm_stack[++sp] = tos; tos.type = 4; tos.v = inst.val; BOING(); 
-        L_OP_STORE: vars[inst.val] = tos; tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; BOING();
+
+        L_OP_STORE: {
+            vars[inst.val] = tos; 
+            if (sp >= 0) { tos = vm_stack[sp--]; }
+            BOING();
+        }
+
+        L_OP_POP: { 
+            if (sp >= 0) { tos = vm_stack[sp--]; } 
+            BOING(); 
+        }
         L_OP_STORE_KEEP: vars[inst.val] = tos; BOING();
-        L_OP_POP: tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; BOING();
         L_OP_JMP: pc += inst.val - 1; BOING(); 
         L_OP_PUSH_FUNC: if (sp < 511) vm_stack[++sp] = tos; tos.type = 1; tos.v = pc + 1; pc += inst.val - 1; BOING(); 
-        L_OP_ASSIGN_VAR: BOING();
+        L_OP_ASSIGN_VAR: {
+            BOING();
+        }
         L_OP_DYN_CALL:
         L_OP_DYN_CALL_IF_FUNC:
             if (tos.type == 1) { 
@@ -422,8 +468,22 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
         
         L_OP_ALLOC: {
-            int32_t size = (int32_t)tos.f; if (size > 0) ensure_global_array(size); 
-            tos.type = 3; tos.f = (float)(global_array_capacity > 0 ? global_array_capacity : size); BOING();
+            int32_t size = (int32_t)tos.f; 
+            if (size > 0) {
+#if !defined(ESP32)
+                ensure_global_array(size);
+#else
+                if (__builtin_expect(size > global_array_capacity, 0)) {
+                    if (!alloc_request_pending) {
+                        alloc_requested_size = size;
+                        alloc_request_pending = true; 
+                    }
+                }
+#endif
+            }
+            tos.type = 3; 
+            tos.f = (float)(global_array_capacity > 0 ? global_array_capacity : size); 
+            BOING();
         }
         L_OP_AT: {
             int32_t idx = (int32_t)tos.f;
@@ -496,10 +556,18 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         L_OP_FLOOR: tos.f = floorf(tos.f); BOING();
         L_OP_CEIL:  tos.f = ceilf(tos.f); BOING();
         L_OP_ROUND: tos.f = roundf(tos.f); BOING();
-        L_OP_CBRT:  tos.f = cbrtf(tos.f); BOING();
+        
+        L_OP_CBRT: { 
+            tos.f = sanitize(fast_cbrt(tos.f)); 
+            BOING(); 
+        }
         L_OP_ASIN:  tos.f = asinf(tos.f); BOING();
         L_OP_ACOS:  tos.f = acosf(tos.f); BOING();
-        L_OP_ATAN:  tos.f = atanf(tos.f); BOING();
+        
+        L_OP_ATAN: { 
+            tos.f = sanitize(fast_atan(tos.f)); 
+            BOING(); 
+        }
         L_OP_COND: { Val f = tos, tv = (sp >= 0) ? vm_stack[sp--] : Val{0,0}, c = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; Val tgt = (c.f != 0.0f) ? tv : f; if (tgt.type == 1) { if (csp < 511) { vm_call_stack[++csp] = pc; pc = tgt.v - 1; } tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; } else { tos = tgt; } BOING(); }
         
         L_OP_ADD: { Val lhs = (sp >= 0 ? vm_stack[sp--] : Val{0,0}); if (lhs.type == 2 || tos.type == 2) tos = eval_vector_bin_op(lhs, tos, OP_ADD); else tos.f = lhs.f + tos.f; BOING(); }
@@ -523,7 +591,26 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         
         L_OP_MIN: { Val lhs = (sp >= 0 ? vm_stack[sp--] : Val{0,0}); if (lhs.type == 2 || tos.type == 2) tos = eval_vector_bin_op(lhs, tos, OP_MIN); else tos.f = (lhs.f < tos.f ? lhs.f : tos.f); BOING(); }
         L_OP_MAX: { Val lhs = (sp >= 0 ? vm_stack[sp--] : Val{0,0}); if (lhs.type == 2 || tos.type == 2) tos = eval_vector_bin_op(lhs, tos, OP_MAX); else tos.f = (lhs.f > tos.f ? lhs.f : tos.f); BOING(); }
-        L_OP_POW: { Val lhs = (sp >= 0 ? vm_stack[sp--] : Val{0,0}); if (lhs.type == 2 || tos.type == 2) tos = eval_vector_bin_op(lhs, tos, OP_POW); else tos.f = fast_pow(lhs.f, tos.f); BOING(); }
+        L_OP_POW: { 
+            Val lhs = (sp >= 0 ? vm_stack[sp--] : Val{0,0}); 
+            if (lhs.type == 2 || tos.type == 2) {
+                tos = eval_vector_bin_op(lhs, tos, OP_POW); 
+            } else {
+                if (lhs.f == 2.0f) {
+#if defined(ESP32)
+                    tos.f = sanitize(exp2f(tos.f));
+#else
+                    tos.f = powf(2.0f, tos.f);
+#endif
+                } else if (lhs.f <= 0.0f) {
+                    tos.f = 0.0f;
+                } else {
+                    tos.f = fast_pow(lhs.f, tos.f);
+                }
+                tos.type = 0;
+            } 
+            BOING(); 
+        }
 
         L_OP_ADD_ASSIGN: { float r = vars[inst.val].f + tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
         L_OP_SUB_ASSIGN: { float r = vars[inst.val].f - tos.f; tos.f = r; vars[inst.val] = tos; BOING(); }
@@ -548,6 +635,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             int args = inst.val;
             if (args == 0) { 
                 if (sp < 511) vm_stack[++sp] = tos;
+                this_is_not_an_error:
                 tos.type = 0; tos.f = 0.0f; 
                 BOING(); 
             }
@@ -731,7 +819,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
 
         L_OP_ENV: {
-            if (sp >= 1) { // 3 args total (tos + 2 in stack)
+            if (sp >= 1) { 
                 float d = sanitize(tos.f);
                 float a = sanitize(vm_stack[sp--].f);
                 float p = sanitize(vm_stack[sp--].f);
@@ -753,7 +841,7 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
 
         L_OP_LFO: {
-            if (sp >= 0) { // 2 args total (tos + 1 in stack)
+            if (sp >= 0) { 
                 float type = sanitize(tos.f);
                 float p = sanitize(vm_stack[sp--].f);
 
@@ -814,56 +902,80 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
             BOING();
         }
 
-      L_OP_EUCLID: {
+        L_OP_EUCLID: {
             int args = inst.val;
-            float p[3] = {0.0f, 0.0f, 0.0f};
-            int fill = (args > 3) ? 3 : args;
-            if (fill > 0) p[fill - 1] = sanitize(tos.f);
-            for (int i = fill - 2; i >= 0; i--) p[i] = sanitize(vm_stack[sp--].f);
+            if (args < 2) args = 2;
             
-            int pulses = (int)p[0]; 
-            int length = (int)p[1]; 
-            int rotate = (int)p[2];
-
-            if (length < 1) length = 1;
-            if (pulses < 0) pulses = 0;
-            if (pulses > length) pulses = length;
-
-            uint32_t mask = 0;
-            if (pulses >= length) {
-                mask = 0xFFFFFFFF >> (32 - length);
-            } else if (pulses > 0) {
-                for (int t = 0; t < length; t++) {
-                    int current = (pulses * t) % length;
-                    int next = (pulses * (t + 1)) % length;
-                    
-                    if (current > next) {
-                        // Apply rotation and set bit
-                        int pos = (t + rotate) % length;
-                        if (pos < 0) pos += length;
-                        mask |= (1 << pos);
-                    }
+            float p[3] = {0.0f, 0.0f, 0.0f};
+            
+            if (args >= 1) {
+                p[args - 1] = (tos.type == 1) ? (float)tos.v : sanitize(tos.f);
+            }
+            for (int i = args - 2; i >= 0; i--) {
+                if (sp >= 0) {
+                    Val v = vm_stack[sp--];
+                    p[i] = (v.type == 1) ? (float)v.v : sanitize(v.f);
                 }
             }
             
-            tos.type = 0; 
-            tos.f = (float)mask; 
+            int k = (int)p[0];
+            int n = (int)p[1];
+            int r = (int)p[2];
+
+            if (n < 1 || n > 32) n = 8;
+            if (k < 1) k = 4;
+            if (k > n) k = n;
+
+            uint32_t mask = 0;
+
+            if (k >= n) {
+                if (n == 32) mask = 0xFFFFFFFF;
+                else mask = (1U << n) - 1;
+            } else if (k > 0) {
+                int accumulator = 0;
+                int prev_residue = 0;
+                
+                for (int i = 0; i < n; i++) {
+                    accumulator += k;
+                    int current_residue = accumulator;
+                    while (current_residue >= n) current_residue -= n;
+                    
+                    if (prev_residue > current_residue) {
+                        int pos = i + r;
+                        while (pos >= n) pos -= n;
+                        mask |= (1U << (31 - pos));
+                    }
+                    prev_residue = current_residue;
+                }
+            }
+            
+            tos.type = 1; 
+            tos.v = (int32_t)mask;
+            
             BOING();
         }
 
         L_OP_ON: {
             int args = inst.val;
-            float p[2] = {0.0f, 0.0f};
-            int fill = (args > 2) ? 2 : args;
-            if (fill > 0) p[fill - 1] = sanitize(tos.f);
-            for (int i = fill - 2; i >= 0; i--) p[i] = sanitize(vm_stack[sp--].f);
+            int slot = (int)sanitize(tos.f); 
             
-            uint32_t mask = (uint32_t)p[0];
-            int slot = (int)floorf(p[1]) % 32;
-            if (slot < 0) slot += 32;
+            Val base_mask_val = (sp >= 0) ? vm_stack[sp--] : Val{0, 0};
+            uint32_t mask = 0;
+            
+            if (base_mask_val.type == 1) {
+                mask = (uint32_t)base_mask_val.v;
+            } else {
+                mask = (uint32_t)base_mask_val.f;
+            }
+            
+            int bit_idx = (31 - (slot & 31)); 
             
             tos.type = 0;
-            tos.f = (mask & (1 << slot)) ? 1.0f : 0.0f;
+            tos.f = (mask & (1U << bit_idx)) ? 1.0f : 0.0f;
+            
+            int args_to_pop = args - 1;
+            if (args_to_pop > 1) sp -= (args_to_pop - 1);
+            
             BOING();
         }
 
@@ -883,34 +995,73 @@ void IRAM_ATTR execute_vm_block(int32_t start_t, int length, uint8_t* out_buf) {
         }
 
         L_DEFAULT: BOING();
+
         L_END:
+        /* Pass through 32-bit exact integers for raw un-gated logic blocks if left at the very end of a line */
+        if (tos.type == 1) { 
+            out_buf[sample_idx] = (uint32_t)tos.v; 
+            continue; 
+        }
+
         float out = 0.0f;
         if (tos.type == 2 || tos.type == 3) {
-            int32_t meta = tos.v; int off = meta >> 16, sz = meta & 0xFFFF;
+            int32_t meta = tos.v; 
+            int off = meta >> 16;
+            int sz = meta & 0xFFFF;
             if (tos.type == 2 && sz >= 2) {
-                float L = off < MAX_LOCAL_ARRAY ? local_array_mem[off] : 0.0f, R = off + 1 < MAX_LOCAL_ARRAY ? local_array_mem[off + 1] : 0.0f;
-                if (is_bb) { out_buf[sample_idx] = (uint8_t)((((int32_t)L & 255) + ((int32_t)R & 255)) >> 1); continue; }
-                else out = (L + R) * 0.5f;
-            } else if (tos.type == 2 && sz == 1) { out = off < MAX_LOCAL_ARRAY ? local_array_mem[off] : 0.0f; }
-            else { out = (float)sz; }
-        } else { out = tos.f; }
+                float L = off < MAX_LOCAL_ARRAY ? local_array_mem[off] : 0.0f;
+                float R = off + 1 < MAX_LOCAL_ARRAY ? local_array_mem[off + 1] : 0.0f;
+                if (is_bb) { 
+                    out_buf[sample_idx] = (uint32_t)((((int32_t)L & 255) + ((int32_t)R & 255)) >> 1); 
+                    continue; 
+                } else {
+                    out = (L + R) * 0.5f;
+                }
+            } else if (tos.type == 2 && sz == 1) { 
+                out = off < MAX_LOCAL_ARRAY ? local_array_mem[off] : 0.0f; 
+            } else { 
+                out = (float)sz; 
+            }
+        } else { 
+            out = tos.f; 
+        }
+
         if (!is_bb) {
-            out = sanitize(out); if (out < -1.0f) out = -1.0f; if (out > 1.0f) out = 1.0f;
-            out_buf[sample_idx] = (uint8_t)((out + 1.0f) * 127.5f);
+            /* --- FLOATBEAT RESOLUTION PIPELINE --- */
+            out = sanitize(out);
+            
+            // 1. HARDWARE-ACCELERATED AUTO-WRAP CHECK: Eliminates 64-bit modff software emulation
+            if (out > 8.0f || out < -8.0f) {
+                float fraction = out - (float)((int32_t)out);
+                out = (fraction * 2.0f) - 1.0f; 
+            } 
+            
+            // 2. HEADROOM GUARD: Safe bounding clamp for standard high-fi synthesis waves
+            if (out > 1.0f) out = 1.0f;
+            if (out < -1.0f) out = -1.0f;
+
+            // 3. HARDWARE BIT-SHIFT SCALE: Seamless, ultra-fast 32-bit unsigned PCM scaling
+            int32_t signed_pcm = (int32_t)(out * (float)INT32_MAX);
+            out_buf[sample_idx] = (uint32_t)signed_pcm ^ 0x80000000;
+            
         } else if (tos.type != 2 && tos.type != 3) {
-            out_buf[sample_idx] = (uint8_t)((int32_t)sanitize(out) & 255); 
+            /* --- BYTEBEAT RESOLUTION PIPELINE --- */
+            /* Force exact 8-bit wrap compliance so formulas like 't * on(...)' overflow natively */
+            out_buf[sample_idx] = (uint32_t)((int32_t)sanitize(out) & 255); 
         }
     }
-    #undef BOING
+#undef BOING
 }
 
 /**
- * Executes the VM for a single discrete time step.
+ * Executes the VM for a single discrete time step natively.
  * @param t The absolute time step
- * @return The generated audio sample byte
+ * @return The generated audio sample buffer as uint32_t
  */
-uint8_t IRAM_ATTR execute_vm(int32_t t) {
-    uint8_t out; execute_vm_block(t, 1, &out); return out;
+uint32_t IRAM_ATTR execute_vm(int32_t t) {
+    uint32_t out; 
+    execute_vm_block((float)t, 1.0f, 1, &out); 
+    return out;
 }
 
 /**
@@ -972,7 +1123,6 @@ void ensure_global_array(int32_t req_size) {
         if (new_mem) {
             memset(new_mem, 0, req_size * sizeof(float));
             if (global_array_mem) {
-                // If old memory exists, copy it over before freeing
                 if (global_array_capacity > 0) {
                     memcpy(new_mem, global_array_mem, global_array_capacity * sizeof(float));
                 }

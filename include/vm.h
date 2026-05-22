@@ -59,17 +59,18 @@ String decompile(bool to_rpn);
 /**
  * Executes the VM for a single discrete time step.
  * @param t The absolute time step
- * @return The generated audio sample byte
+ * @return The generated 32-bit native audio sample stream word or mask
  */
-uint8_t execute_vm(int32_t t);
+uint32_t execute_vm(int32_t t);
 
 /**
  * Executes a block of bytecode for audio generation.
- * @param start_t The starting time step
+ * @param start_t The starting time step (allows fractional alignment)
+ * @param t_step The timeline increment per sample
  * @param length The number of samples to generate
  * @param out_buf The output buffer to write to
  */
-void execute_vm_block(int32_t start_t, int length, uint8_t* out_buf);
+void execute_vm_block(float start_t, float t_step, int length, uint32_t* out_buf);
 
 /**
  * Updates IMU variables in the VM state.
@@ -174,7 +175,7 @@ String getVarName(int id);
 
 /**
  * Checks if a variable is defined.
- * @param name The name to check
+ * @param name To check
  * @return true if defined, false otherwise
  */
 bool isVarDefined(const String& name); 

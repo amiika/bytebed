@@ -333,6 +333,7 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         this.t_frac = 0;
         this.targetSampleRate = 8000;
         this.is_playing = false;
+        this.is_floatbeat = false;
 
         this.port.onmessage = async (e) => {
             const msg = e.data;
@@ -358,6 +359,7 @@ class BytebeatWorklet extends AudioWorkletProcessor {
                 this.targetSampleRate = msg.rate;
                 if (this.wasm && this.wasm.wasm_set_sample_rate) this.wasm.wasm_set_sample_rate(msg.rate);
             } else if (msg.type === 'mode') {
+                this.is_floatbeat = (msg.mode === 1);
                 if (this.wasm && this.wasm.wasm_set_play_mode) this.wasm.wasm_set_play_mode(msg.mode);
                 if (this.wasm && this.wasm.wasm_reset_vm) this.wasm.wasm_reset_vm();
             } else if (msg.type === 'reset') {
@@ -375,7 +377,7 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         };
     }
 
-    process(inputs, outputs, parameters) {
+       process(inputs, outputs, parameters) {
         const out = outputs[0][0];
         if (!this.wasm || !this.is_playing) {
             out.fill(0);
@@ -384,8 +386,15 @@ class BytebeatWorklet extends AudioWorkletProcessor {
 
         const timeStep = this.targetSampleRate / sampleRate;
         for (let i = 0; i < out.length; i++) {
+            // Fetch the native 32-bit uint32_t sample from the VM
             let sample = this.wasm.wasm_execute(this.t_audio);
-            out[i] = (sample - 128) / 128.0; 
+            
+            if (this.is_floatbeat) {
+                let unsignedSample = sample >>> 0;
+                out[i] = (unsignedSample / 2147483647.5) - 1.0;
+            } else {
+                out[i] = ((sample & 255) - 128) / 128.0; 
+            }
             
             this.t_frac += timeStep;
             if (this.t_frac >= 1.0) {
@@ -864,7 +873,7 @@ let wasmReadyPromise = (async function initWASM() {
         }
 
         initMIDI(); 
-        updateChannelButton(); // Ensure channel button UI matches loaded state
+        updateChannelButton(); 
         
         requestAnimationFrame(renderLoop);
     } catch (err) {
@@ -1041,8 +1050,19 @@ function renderLoop() {
     if (end_t - start_t > 4000) start_t = end_t - 4000;
     
     for (let t = start_t; t < end_t; t++) {
-        let val = wasm.wasm_execute(t);
-        scope.drawBuffer.push({ t: t, value: [val, val] });
+        let raw_val = wasm.wasm_execute(t);
+        let ui_sample = 0;
+        
+        if (isFloatbeat) {
+            let unsignedVal = raw_val >>> 0;
+            let norm_float = (unsignedVal / 2147483647.5) - 1.0;
+            ui_sample = Math.floor((norm_float + 1.0) * 127.5);
+        } else {
+            // Mask and clamp legacy 8-bit Bytebeat directly
+            ui_sample = raw_val & 255;
+        }
+        
+        scope.drawBuffer.push({ t: t, value: [ui_sample, ui_sample] });
     }
     
     t_viz = end_t;
@@ -1067,7 +1087,6 @@ formulaInput.addEventListener('input', (e) => { autoExpand(); if (wasm && is_aut
 function refreshMidiInputs(midiAccess) {
     midiInputs = Array.from(midiAccess.inputs.values());
     
-    // Bounds check the loaded state against physically available devices
     if (currentMidiPortIdx >= midiInputs.length) {
         currentMidiPortIdx = -1;
         localStorage.setItem('bytebed_midi_port', '-1');

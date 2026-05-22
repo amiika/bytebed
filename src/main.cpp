@@ -23,7 +23,6 @@ uint8_t pending_flags = 0;
 // UI Visualization Buffer
 #define UI_RING_SIZE 4096
 volatile uint8_t ui_sample_ring[UI_RING_SIZE];
-volatile int32_t ui_t_ring[UI_RING_SIZE];
 volatile uint32_t ui_ring_head = 0;
 uint32_t ui_ring_tail = 0;
 
@@ -47,34 +46,48 @@ static String backup_input_buffer = "";
 static int backup_cursor_pos = 0;
 static bool patch_edited = false;
 
+extern volatile int32_t alloc_requested_size;
+extern volatile bool alloc_request_pending;
+
+/**
+ * @brief Periodically checks and handles dynamic array requests from Core 1
+ * without blocking the real-time audio thread.
+ */
+void handle_deferred_allocations() {
+    if (__builtin_expect(alloc_request_pending, 0)) {
+        int32_t target_size = alloc_requested_size;
+        if (target_size > global_array_capacity) {
+            ensure_global_array(target_size);
+        }
+        alloc_request_pending = false; 
+    }
+}
+
 /**
  * @brief Helper to keep the VM 'sr' and 'mn' variables in sync with hardware.
  */
 void updateRuntimeVars() {
+    // Dynamic fetching ensures perfect execution context post-compilation wipe
     int i_sr = getVarId("sr");
     vars[i_sr].type = 0;
     vars[i_sr].f = (float)current_sample_rate;
 
     int i_mn = getVarId("mn");
-    vars[i_mn].type = 0; // Standard integer/float type, no arrays!
+    vars[i_mn].type = 0; 
     vars[i_mn].f = (float)current_midi_note;
 }
 
 void onNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
     if (!usb_midi_enabled) return;
-    current_midi_freq = 440.0f * pow(2.0f, (note - 69) / 12.0f);
-    float gate = velocity / 127.0f;
-    
-    // Pass the freq, gate, and raw note number to the VM
+    current_midi_freq = 440.0f * powf(2.0f, (float)(note - 69) / 12.0f);
+    float gate = (float)velocity / 127.0f;
     updateMIDIVars(current_midi_freq, gate, (float)note);
 }
 
 void onNoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
     if (!usb_midi_enabled) return;
-    float released_freq = 440.0f * pow(2.0f, (note - 69) / 12.0f);
-    
-    // If the released note is the currently playing note, turn the gate off
-    if (abs(current_midi_freq - released_freq) < 0.1f) {
+    float released_freq = 440.0f * powf(2.0f, (float)(note - 69) / 12.0f);
+    if (fabsf(current_midi_freq - released_freq) < 0.1f) {
         updateMIDIVars(current_midi_freq, 0.0f, (float)note);
     }
 }
@@ -92,7 +105,6 @@ void midiTask(void *pvParameters) {
 }
 
 /* Keyboard helpers */
-
 void doEditorInsert(char c) {
     input_buffer = input_buffer.substring(0, cursor_pos) + c + input_buffer.substring(cursor_pos);
     cursor_pos++;
@@ -107,13 +119,8 @@ void doEditorBackspace() {
     }
 }
 
-void doEditorLeft() {
-    if (cursor_pos > 0) cursor_pos--;
-}
-
-void doEditorRight() {
-    if (cursor_pos < (int)input_buffer.length()) cursor_pos++;
-}
+void doEditorLeft() { if (cursor_pos > 0) cursor_pos--; }
+void doEditorRight() { if (cursor_pos < (int)input_buffer.length()) cursor_pos++; }
 
 void doEditorEnter() {
     saveUndo();
@@ -148,63 +155,103 @@ void doEditorClearAll() {
     if (is_sync_master) broadcastStop();
 }
 
-/* Audio DSP Task */
-
 /**
- * Core 1 DSP Task. Generates Bytebeat/Floatbeat audio via VM,
- * performs DC offset removal, and scales volume.
+ * Core 1 DSP Task. Features automatic 2x VM acceleration on 44.1kHz/48kHz buffers
+ * using smooth linear float interpolation across native hardware registers.
  * @param pvParameters FreeRTOS task params
  */
+#pragma GCC optimize ("O3")
 void IRAM_ATTR playBytebeat(void *pvParameters) {
     int16_t pcm_buffer[AUDIO_BUF_SIZE * 2]; 
-    uint8_t block_buf[AUDIO_BUF_SIZE];
+    uint32_t block_buf[AUDIO_BUF_SIZE]; 
     int ui_tick = 0;
     uint32_t wave_ptr = 0; 
     
-    // Core DSP State Variables for DC Blocking
     float dc_block_in = 0.0f;
     float dc_block_out = 0.0f;
     
+    // Extrapolator hold buffers
+    static float last_frame_output = 0.0f;
+    static float current_frame_output = 0.0f;
+
     esp_task_wdt_add(NULL); 
 
     while(1) {
         if (is_playing) {
             int mod = std::max(1, 1 << drawScale); 
             
-            // 1. EXECUTE: Bytecode crunching
-            execute_vm_block(t_raw, AUDIO_BUF_SIZE, block_buf);
+            // AUTOMATIC VM DOWNSAMPLING
+            bool use_downsample = (current_sample_rate >= 44100);
+            int virtual_block_size = use_downsample ? (AUDIO_BUF_SIZE / 2) : AUDIO_BUF_SIZE;
+            float vm_t_step = use_downsample ? 2.0f : 1.0f;
             
-            // 2. TIGHT INLINE DSP & DISPATCH
+            // Safely execute VM with clean strided fractional stepping
+            execute_vm_block((float)t_raw, vm_t_step, virtual_block_size, block_buf);
+            
+            int virtual_read_ptr = 0;
+
+            // HARDWARE INTERPOLATION & DISPATCH
             for(int i = 0; i < AUDIO_BUF_SIZE; i++) {
-                uint8_t sample = block_buf[i];
+                uint32_t raw_sample = 0;
                 
-                // UI FEEDING LOGIC
+                if (!use_downsample) {
+                    raw_sample = block_buf[i];
+                } else {
+                    if ((i & 1) == 0) { 
+                        last_frame_output = current_frame_output;
+                        uint32_t packed = block_buf[virtual_read_ptr++];
+                        
+                        if (current_play_mode == MODE_BYTEBEAT) {
+                            current_frame_output = (float)((int16_t)(packed & 255) - 128) * 256.0f;
+                        } else {
+                            int32_t signed_32 = (int32_t)(packed - 2147483648U);
+                            current_frame_output = (float)((int16_t)(signed_32 >> 16));
+                        }
+                    }
+                    
+                    // Lean arithmetic: Step is 0.0f on even frames, 0.5f on odd frames.
+                    float step_acc = (i & 1) ? 0.5f : 0.0f;
+                    float blended_float = last_frame_output + (current_frame_output - last_frame_output) * step_acc;
+                    
+                    if (current_play_mode == MODE_BYTEBEAT) {
+                        raw_sample = (uint32_t)((int32_t)(blended_float / 256.0f) + 128) & 255;
+                    } else {
+                        raw_sample = (uint32_t)((int16_t)blended_float) << 16;
+                    }
+                }
+
+                uint8_t ui_sample = 0;
+                float raw_float = 0.0f;
+                
+                if (current_play_mode == MODE_BYTEBEAT) {
+                    ui_sample = (uint8_t)(raw_sample & 255);
+                    raw_float = (float)((int16_t)(ui_sample - 128) << 8); 
+                } else {
+                    int16_t signed_16 = (int16_t)(raw_sample >> 16); 
+                    raw_float = (float)signed_16; 
+                    ui_sample = (uint8_t)((signed_16 >> 8) + 128);
+                }
+                
                 if (current_vis == VIS_WAV_WIRE) {
                     if (++ui_tick >= mod) {
                         ui_tick = 0;
-                        wave_buf[wave_ptr] = sample; 
-                        if (++wave_ptr >= 240) {
-                            wave_ptr = 0; 
-                        }
+                        wave_buf[wave_ptr] = ui_sample; 
+                        if (++wave_ptr >= 240) wave_ptr = 0; 
                     }
                 } else if (current_vis != VIS_HISTORY) {
                     uint32_t h = ui_ring_head;
                     uint32_t next_h = (h + 1) % UI_RING_SIZE;
                     if (next_h != ui_ring_tail) { 
-                        ui_sample_ring[h] = sample;
-                        ui_t_ring[h] = t_raw;
+                        ui_sample_ring[h] = ui_sample;
                         ui_ring_head = next_h;
                     }
                 }
                 
-                t_raw++;
+                t_raw++; // Universal hardware clock synchronization
                 
-                // DC Blocker (1-Pole High-Pass)
-                float raw_float = (sample - 128.0f) * 255.0f; 
                 dc_block_out = raw_float - dc_block_in + 0.995f * dc_block_out;
                 dc_block_in = raw_float;
                 
-                // LOGARITHMIC VOLUME SCALING
                 float log_vol = volume_perc * volume_perc * volume_perc;
                 int16_t final_pcm = (int16_t)(dc_block_out * log_vol);
                 
@@ -212,15 +259,12 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                 pcm_buffer[i * 2 + 1] = final_pcm; 
             }
             
-            // 3. PUSH DIRECT TO DMA
             audioOut.pushStereoBlock(pcm_buffer, AUDIO_BUF_SIZE);
             esp_task_wdt_reset(); 
 
         } else {
-            // Push pure silence to keep the I2S clocks running and the amplifier awake.
             memset(pcm_buffer, 0, sizeof(pcm_buffer));
             audioOut.pushStereoBlock(pcm_buffer, AUDIO_BUF_SIZE);
-            
             vTaskDelay(pdMS_TO_TICKS(10));
             esp_task_wdt_reset();
         }
@@ -248,8 +292,10 @@ void applyCompilationResult(bool valid, String prefix = "") {
  */
 void processUIRingBuffer() {
     int processed = 0;
+    static uint32_t local_ui_t = 0;
+    
     while (ui_ring_tail != ui_ring_head && processed < 4000) {
-        updatePersistentVis(ui_sample_ring[ui_ring_tail], ui_t_ring[ui_ring_tail]);
+        updatePersistentVis(ui_sample_ring[ui_ring_tail], local_ui_t++);
         ui_ring_tail = (ui_ring_tail + 1) % UI_RING_SIZE;
         processed++;
     }
@@ -321,16 +367,15 @@ int getPressedDigit(const Keyboard_Class::KeysState& st) {
 void uiTask(void *pvParameters) {
     static uint32_t last_sensor_poll = 0; 
     
-    // Universal Auto-Repeat State Machine
     enum RepeatAction { REP_NONE, REP_CHAR, REP_BACKSPACE, REP_LEFT, REP_RIGHT };
     static RepeatAction rep_action = REP_NONE;
     static char rep_char = 0;
     static uint32_t rep_timer = 0;
 
     while(1) {
+        handle_deferred_allocations();
         processUIRingBuffer();
         
-        // INCOMING CODE SYNC HANDLER
         if (pending_code_update) {
             input_buffer = String((char*)pending_code_buffer);
             cursor_pos = input_buffer.length();
@@ -351,11 +396,8 @@ void uiTask(void *pvParameters) {
             pending_code_update = false;
         }
 
-        // 20Hz NON-BLOCKING BACKGROUND POLLING
         if (millis() - last_sensor_poll > 50) {
             last_sensor_poll = millis();
-
-            // Re-inject variables into VM to protect against memory wipes
             updateRuntimeVars();
 
             M5.Imu.update();
@@ -369,9 +411,8 @@ void uiTask(void *pvParameters) {
         
         auto st = M5Cardputer.Keyboard.keysState();
         
-        // Status bar logic with confirmations
         if (pending_confirm == CONF_BANK) {
-            snprintf(current_top_text, 63, "BANK %d: %s", confirm_bank, String(bankNames[confirm_bank]));
+            snprintf(current_top_text, 63, "BANK %d: %s", confirm_bank, String(bankNames[confirm_bank]).c_str());
             status_msg = patch_edited ? "UNSAVED - OK?" : "";
             status_timer = millis() + 1000;
         } else if (pending_confirm == CONF_LOAD_PATCH) {
@@ -398,20 +439,18 @@ void uiTask(void *pvParameters) {
                 if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) && !st.ctrl) enterPressed = true;
                 if (!patch_edited && pending_confirm != CONF_SAVE_PATCH) enterPressed = true;
 
-                // Fast browsing
                 int new_digit = (st.ctrl || st.opt || st.alt) ? getPressedDigit(st) : -1;
                 
                 if (new_digit != -1) {
                     int current_target = (pending_confirm == CONF_BANK) ? confirm_bank : confirm_slot;
                     if (new_digit == current_target) {
-                        enterPressed = true; // Press again to confirm
+                        enterPressed = true; 
                     } else {
                     if (st.ctrl && pending_confirm == CONF_BANK) confirm_bank = new_digit;
                     else if (st.opt && pending_confirm == CONF_LOAD_PATCH) confirm_slot = new_digit;
                     else if (st.alt && pending_confirm == CONF_SAVE_PATCH) confirm_slot = new_digit;
                     else enterPressed = false;
 
-                    // Update live preview immediately for the new slot
                     if (pending_confirm == CONF_BANK) input_buffer = slots[confirm_bank][1].formula;
                     else input_buffer = slots[current_bank][confirm_slot].formula;
                     cursor_pos = input_buffer.length();
@@ -443,7 +482,6 @@ void uiTask(void *pvParameters) {
                     }
                     pending_confirm = CONF_NONE;
                 } else if (new_digit == -1) {
-                    // Cancel if ANY key is pressed that isn't the active shortcut or Enter
                     char expectedChar = '0' + ((pending_confirm == CONF_BANK) ? confirm_bank : confirm_slot);
                     char expectedSymbol = ctrl_symbols[expectedChar - '0'];
 
@@ -474,22 +512,21 @@ void uiTask(void *pvParameters) {
             // 1. SETUP PENDING CONFIRMATIONS (CTRL, OPT, ALT + 0-9)
             if (pressed_digit != -1 && (st.ctrl || (st.opt && !st.shift) || (st.alt && !st.shift))) {
                 
-                // Snapshot the current workspace before previewing
                 backup_input_buffer = input_buffer;
                 backup_cursor_pos = cursor_pos;
                 
                 if (st.ctrl) {
                     pending_confirm = CONF_BANK;
                     confirm_bank = pressed_digit;
-                    input_buffer = slots[confirm_bank][1].formula; // Live preview target
+                    input_buffer = slots[confirm_bank][1].formula; 
                 } else if (st.opt && !st.shift) {
                     pending_confirm = CONF_LOAD_PATCH;
                     confirm_slot = pressed_digit;
-                    input_buffer = slots[current_bank][confirm_slot].formula; // Live preview target
+                    input_buffer = slots[current_bank][confirm_slot].formula; 
                 } else if (st.alt && !st.shift) {
                     pending_confirm = CONF_SAVE_PATCH;
                     confirm_slot = pressed_digit;
-                    input_buffer = slots[current_bank][confirm_slot].formula; // Preview what will be overwritten
+                    input_buffer = slots[current_bank][confirm_slot].formula; 
                 }
                 
                 cursor_pos = input_buffer.length();
@@ -672,7 +709,7 @@ void uiTask(void *pvParameters) {
             draw(); 
             last_draw = millis(); 
         }
-        vTaskDelay(pdMS_TO_TICKS(10));
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 }
 
