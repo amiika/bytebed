@@ -420,7 +420,7 @@ void uiTask(void *pvParameters) {
             status_msg = patch_edited ? "UNSAVED - OK?" : "";
             status_timer = millis() + 1000;
         } else if (pending_confirm == CONF_SAVE_PATCH) {
-            snprintf(current_top_text, 63, "PATCH %d", confirm_slot);
+            snprintf(current_top_text, 63, "BANK %d: PATCH %d", confirm_bank, confirm_slot);
             status_msg = "OVERWRITE "+String(confirm_slot)+"?";
             status_timer = millis() + 1000;
         } else if (st.opt) snprintf(current_top_text, 63, "B%d LOAD: 0-9", current_bank);
@@ -439,21 +439,36 @@ void uiTask(void *pvParameters) {
                 if (M5Cardputer.Keyboard.isKeyPressed(KEY_ENTER) && !st.ctrl) enterPressed = true;
                 if (!patch_edited && pending_confirm != CONF_SAVE_PATCH) enterPressed = true;
 
-                int new_digit = (st.ctrl || st.opt || st.alt) ? getPressedDigit(st) : -1;
+                int new_digit = getPressedDigit(st);
                 
                 if (new_digit != -1) {
-                    int current_target = (pending_confirm == CONF_BANK) ? confirm_bank : confirm_slot;
-                    if (new_digit == current_target) {
-                        enterPressed = true; 
-                    } else {
-                    if (st.ctrl && pending_confirm == CONF_BANK) confirm_bank = new_digit;
-                    else if (st.opt && pending_confirm == CONF_LOAD_PATCH) confirm_slot = new_digit;
-                    else if (st.alt && pending_confirm == CONF_SAVE_PATCH) confirm_slot = new_digit;
-                    else enterPressed = false;
-
-                    if (pending_confirm == CONF_BANK) input_buffer = slots[confirm_bank][1].formula;
-                    else input_buffer = slots[current_bank][confirm_slot].formula;
-                    cursor_pos = input_buffer.length();
+                    // IF CTRL IS HELD: Switch Bank, keep confirmation active
+                    if (st.ctrl) {
+                        confirm_bank = new_digit;
+                        // Reload preview formula for the new bank, same slot
+                        input_buffer = slots[confirm_bank][confirm_slot].formula;
+                        cursor_pos = input_buffer.length();
+                        status_msg = "BANK " + String(confirm_bank) + " SELECTED";
+                        status_timer = millis() + 1000;
+                    } 
+                    // IF OPT IS HELD: Switch Patch Slot, keep confirmation active
+                    else if (st.opt) {
+                        confirm_slot = new_digit;
+                        // Reload preview formula for the current bank, new slot
+                        input_buffer = slots[confirm_bank][confirm_slot].formula;
+                        cursor_pos = input_buffer.length();
+                        status_msg = "PATCH " + String(confirm_slot) + " SELECTED";
+                        status_timer = millis() + 1000;
+                    }
+                    // IF NO MODIFIER HELD: Use digit to select slot, or confirm
+                    else if (!st.alt) {
+                        if (new_digit == (pending_confirm == CONF_BANK ? confirm_bank : confirm_slot)) {
+                            enterPressed = true;
+                        } else {
+                            confirm_slot = new_digit;
+                            input_buffer = slots[confirm_bank][confirm_slot].formula;
+                            cursor_pos = input_buffer.length();
+                        }
                     }
                 }
                 
@@ -463,39 +478,42 @@ void uiTask(void *pvParameters) {
                         executeLoadPatch(confirm_bank, 1, true);
                     } 
                     else if (pending_confirm == CONF_LOAD_PATCH) {
-                        executeLoadPatch(current_bank, confirm_slot, false);
+                        executeLoadPatch(confirm_bank, confirm_slot, false);
                     } 
                     else if (pending_confirm == CONF_SAVE_PATCH) {
-                        slots[current_bank][confirm_slot].formula = rpn_mode ? decompile(false) : backup_input_buffer; 
-                        slots[current_bank][confirm_slot].sample_rate = current_sample_rate;
-                        slots[current_bank][confirm_slot].mode = current_play_mode;
+                        // Commit to the browsed context parameters
+                        slots[confirm_bank][confirm_slot].formula = rpn_mode ? decompile(false) : backup_input_buffer; 
+                        slots[confirm_bank][confirm_slot].sample_rate = current_sample_rate;
+                        slots[confirm_bank][confirm_slot].mode = current_play_mode;
                         
-                        String keySuffix = String(current_bank) + String(confirm_slot);
-                        String packed = String((int)slots[current_bank][confirm_slot].mode) + "|" + String(current_sample_rate) + "|" + slots[current_bank][confirm_slot].formula;
+                        String keySuffix = String(confirm_bank) + String(confirm_slot);
+                        String packed = String((int)slots[confirm_bank][confirm_slot].mode) + "|" + String(current_sample_rate) + "|" + slots[confirm_bank][confirm_slot].formula;
                         prefs.putString(("s" + keySuffix).c_str(), packed);
                         
                         input_buffer = backup_input_buffer;
                         cursor_pos = backup_cursor_pos;
                         
-                        status_msg = "SAVE " + String(confirm_slot) + " @ B" + String(current_bank) + " OK"; 
+                        status_msg = "SAVE P" + String(confirm_slot) + " @ B" + String(confirm_bank) + " OK"; 
                         status_timer = millis() + 1500;
                     }
                     pending_confirm = CONF_NONE;
+
                 } else if (new_digit == -1) {
                     char expectedChar = '0' + ((pending_confirm == CONF_BANK) ? confirm_bank : confirm_slot);
-                    char expectedSymbol = ctrl_symbols[expectedChar - '0'];
-
+                    
                     bool cancel = false;
                     for (auto i : st.word) {
-                        if (i != expectedChar && i != expectedSymbol) cancel = true;
+                        if (i != expectedChar) cancel = true;
                     }
                     
+                    // Whitelist navigation modifiers to prevent cancellation traps
+                    if (st.ctrl || st.opt) cancel = false; 
+
                     if (pending_confirm == CONF_BANK && (st.alt || st.opt)) cancel = true;
-                    if (pending_confirm == CONF_LOAD_PATCH && (st.ctrl || st.alt)) cancel = true;
-                    if (pending_confirm == CONF_SAVE_PATCH && (st.ctrl || st.opt)) cancel = true;
+                    if (pending_confirm == CONF_LOAD_PATCH && (st.alt)) cancel = true;
+                    if (pending_confirm == CONF_SAVE_PATCH) cancel = false; // Overridden above by modifiers safely
                     
                     if (st.fn || st.shift || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed('`')) cancel = true;
-
                     if (cancel) {
                         input_buffer = backup_input_buffer;
                         cursor_pos = backup_cursor_pos;
@@ -518,15 +536,18 @@ void uiTask(void *pvParameters) {
                 if (st.ctrl) {
                     pending_confirm = CONF_BANK;
                     confirm_bank = pressed_digit;
-                    input_buffer = slots[confirm_bank][1].formula; 
+                    confirm_slot = 1; // Explicit initial alignment target tracking
+                    input_buffer = slots[confirm_bank][confirm_slot].formula; 
                 } else if (st.opt && !st.shift) {
                     pending_confirm = CONF_LOAD_PATCH;
                     confirm_slot = pressed_digit;
-                    input_buffer = slots[current_bank][confirm_slot].formula; 
+                    confirm_bank = current_bank;
+                    input_buffer = slots[confirm_bank][confirm_slot].formula; 
                 } else if (st.alt && !st.shift) {
                     pending_confirm = CONF_SAVE_PATCH;
                     confirm_slot = pressed_digit;
-                    input_buffer = slots[current_bank][confirm_slot].formula; 
+                    confirm_bank = current_bank; // Lock context workspace index parameters immediately
+                    input_buffer = slots[confirm_bank][confirm_slot].formula; 
                 }
                 
                 cursor_pos = input_buffer.length();

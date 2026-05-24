@@ -80,7 +80,7 @@ String decompileRPN() {
                 if (v == (int32_t)v) {
                     out += String((int32_t)v) + " "; 
                 } else {
-                    out += String(v) + " "; 
+                    out += String(v, 7) + " "; 
                 }
                 break;
             }
@@ -93,17 +93,25 @@ String decompileRPN() {
                 int id = inst.val;
                 bool is_func = (id >= 0 && id < 64) ? is_func_map[id] : false;
                 
-                bool is_call = (pc + 1 < len && (prog[pc+1].op == OP_DYN_CALL || prog[pc+1].op == OP_DYN_CALL_IF_FUNC));
-                int neg_offset = is_call ? 2 : 1;
+                bool is_call = (pc + 1 < len && prog[pc+1].op == OP_DYN_CALL);
+                bool is_call_if_func = (pc + 1 < len && prog[pc+1].op == OP_DYN_CALL_IF_FUNC);
+                
+                int neg_offset = (is_call || is_call_if_func) ? 2 : 1;
                 bool has_neg = (pc + neg_offset < len && prog[pc+neg_offset].op == OP_NEG);
                 
                 String prefix = has_neg ? "-" : "";
                 
                 if (is_call) {
-                    out += prefix + getVarName(id) + " ";
+                    int args = prog[pc+1].val;
+                    out += String(args) + " : " + prefix + getVarName(id) + " ";
                     pc++; 
                     if (has_neg) pc++;
                 } 
+                else if (is_call_if_func) {
+                    out += prefix + getVarName(id) + " ";
+                    pc++;
+                    if (has_neg) pc++;
+                }
                 else {
                     if (is_func) out += prefix + "&" + getVarName(id) + " ";
                     else {
@@ -181,7 +189,7 @@ String decompileRPN() {
                         if (has_def[i]) {
                             float v = def_val[i];
                             if (v == (int32_t)v) out += String((int32_t)v) + " ";
-                            else out += String(v) + " ";
+                            else out += String(v, 7) + " ";
                         }
                         out += params[i] + " ";
                         if (has_def[i]) out += "= ";
@@ -193,9 +201,7 @@ String decompileRPN() {
                 break;
             }
             case OP_DYN_CALL: 
-                out += "call" + String((int)inst.val) + " ";
-                break;
-            case OP_DYN_CALL_IF_FUNC: 
+            case OP_DYN_CALL_IF_FUNC:
                 break;
             case OP_RET: 
             case OP_BIND: 
@@ -242,8 +248,8 @@ String decompileRPN() {
             case OP_NEQ:
                 out += "!= ";
                 break;
-            case OP_PHASE: case OP_ENV: case OP_LFO: case OP_PC: case OP_EUCLID: case OP_ON:
-                out += getOpSym(inst.op) + " ";
+            case OP_ARITY:
+                out += ": ";
                 break;
             default:
                 String sym = getOpSym(inst.op);
@@ -296,7 +302,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                 if (v == (int32_t)v) {
                     stack[++sp] = String((int32_t)v);
                 } else {
-                    stack[++sp] = String(v);
+                    stack[++sp] = String(v, 7);
                 }
                 prec_stack[sp] = PREC_MAX; 
             }
@@ -349,7 +355,6 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             String base = stack[sp--];  
             if (sp < MAX_STACK - 1) { stack[++sp] = base + "[" + idx + "]=" + val; prec_stack[sp] = PREC_ASSIGN; }
         }
-        
         else if (inst.op == OP_DUP && sp >= 0) {
             String val = stack[sp];
             int p = prec_stack[sp];
@@ -374,7 +379,6 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             int p = prec_stack[sp-1];
             if (sp < MAX_STACK - 1) { stack[++sp] = val; prec_stack[sp] = p; }
         }
-        
         else if (inst.op == OP_POP && sp >= 0) {
             String val = stack[sp]; sp--;
             if (out != "") out += ";";
@@ -417,7 +421,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                     func_str += "=";
                     float v = def_val[i];
                     if (v == (int32_t)v) func_str += String((int32_t)v);
-                    else func_str += String(v);
+                    else func_str += String(v, 7);
                 }
                 if (i < param_cnt - 1) func_str += ",";
             }
@@ -434,19 +438,55 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             
             pc = target_end - 1;
         }
-        else if (inst.op == OP_DYN_CALL && sp >= inst.val) {
+        else if (inst.op == OP_DYN_CALL && sp >= 0) {
             int args = inst.val;
-            String func_name = stack[sp];
+            bool has_explicit_arity = false;
             
-            String func_call = func_name + "(";
-            for (int i = 0; i < args; i++) {
-                func_call += stack[sp - args + i];
-                if (i < args - 1) func_call += ",";
+            if (pc >= 2 && prog[pc-1].op == OP_LOAD && prog[pc-2].op == OP_ARITY && sp >= 1) {
+                has_explicit_arity = true;
             }
-            func_call += ")";
             
-            sp -= (args + 1);
+            String func_name = stack[sp];
+            String func_call = func_name + "(";
+            
+            if (has_explicit_arity && sp >= args + 1) {
+                for (int i = 0; i < args; i++) {
+                    func_call += stack[sp - args - 1 + i]; 
+                    if (i < args - 1) func_call += ", ";
+                }
+                sp -= (args + 2); 
+            } else {
+                int safe_args = (args < sp) ? args : sp;
+                for (int i = 0; i < safe_args; i++) {
+                    func_call += stack[sp - safe_args + i]; 
+                    if (i < safe_args - 1) func_call += ", ";
+                }
+                sp -= (safe_args + 1); 
+            }
+            
+            func_call += ")";
             if (sp < MAX_STACK - 1) { stack[++sp] = func_call; prec_stack[sp] = PREC_MAX; }
+        }
+        else if (inst.op == OP_DYN_CALL_IF_FUNC) {
+            bool has_explicit_arity = false;
+            int args = 0;
+            
+            if (pc >= 2 && prog[pc-1].op == OP_LOAD && prog[pc-2].op == OP_ARITY && sp >= 1) {
+                has_explicit_arity = true;
+                args = stack[sp-1].toInt();
+            }
+            
+            if (has_explicit_arity && sp >= args + 1) {
+                String func_name = stack[sp];
+                String func_call = func_name + "(";
+                for (int i = 0; i < args; i++) {
+                    func_call += stack[sp - args - 1 + i];
+                    if (i < args - 1) func_call += ", ";
+                }
+                func_call += ")";
+                sp -= (args + 2); 
+                if (sp < MAX_STACK - 1) { stack[++sp] = func_call; prec_stack[sp] = PREC_MAX; }
+            } 
         }
         else if (inst.op == OP_VEC && sp >= 0) {
             int size = stack[sp].toInt(); sp--;
@@ -533,8 +573,23 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                 }
             }
         }
+        else if (inst.op == OP_ARITY) {
+            continue; 
+        }
         else if (inst.op == OP_PHASE || inst.op == OP_ENV || inst.op == OP_LFO || inst.op == OP_PC || inst.op == OP_EUCLID || inst.op == OP_ON) {
-            int args = inst.val;
+            int args = 1;
+            bool has_explicit_arity = false;
+            
+            if (pc >= 1 && prog[pc-1].op == OP_ARITY && sp >= 0) {
+                has_explicit_arity = true;
+                args = stack[sp].toInt();
+                sp--;
+            } else {
+                if (inst.op == OP_ENV) args = 3;
+                else if (inst.op == OP_LFO || inst.op == OP_EUCLID || inst.op == OP_ON) args = 2;
+                else if (inst.op == OP_PC) args = 6;
+            }
+            
             String fn_name = "func";
             if (inst.op == OP_PHASE) fn_name = "phase";
             else if (inst.op == OP_ENV) fn_name = "env";
@@ -543,18 +598,23 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             else if (inst.op == OP_EUCLID) fn_name = "euclid";
             else if (inst.op == OP_ON) fn_name = "on";
             
-            if (args == 0) {
-                if (sp < MAX_STACK - 1) { stack[++sp] = fn_name + "()"; prec_stack[sp] = PREC_MAX; }
-            } else if (sp >= args - 1) {
-                String func_call = fn_name + "(";
+            String func_call = fn_name + "(";
+            if (sp >= args - 1) {
                 for (int i = 0; i < args; i++) {
                     func_call += stack[sp - args + 1 + i];
                     if (i < args - 1) func_call += ", ";
                 }
-                func_call += ")";
-                sp -= (args - 1);
-                if (sp < MAX_STACK) { stack[sp] = func_call; prec_stack[sp] = PREC_MAX; }
+                sp -= args;
+            } else {
+                int safe_args = sp + 1;
+                for (int i = 0; i < safe_args; i++) {
+                    func_call += stack[i];
+                    if (i < safe_args - 1) func_call += ", ";
+                }
+                sp = -1;
             }
+            func_call += ")";
+            if (sp < MAX_STACK - 1) { stack[++sp] = func_call; prec_stack[sp] = PREC_MAX; }
         }
         else if ((inst.op >= OP_SIN && inst.op <= OP_ATAN || inst.op == OP_INT) && sp >= 0) { 
              String val = stack[sp--]; 
@@ -579,10 +639,10 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             if (sp < MAX_STACK - 1) { stack[++sp] = sym + val; prec_stack[sp] = 9; }
         }
         else if (inst.op == OP_LOOP_EVAL || inst.op == OP_LOOP_DONE || 
-                 inst.op == OP_DYN_CALL_IF_FUNC || inst.op == OP_RET || 
+                 inst.op == OP_RET || 
                  inst.op == OP_BIND || inst.op == OP_UNBIND || inst.op == OP_DEFAULT_CHECK || inst.op == OP_DEFAULT_INJECT) {
         }
-        else if (sp >= 1) {
+        else if (sp >= 1 && inst.op != OP_DYN_CALL_IF_FUNC && inst.op != OP_DYN_CALL) {
             String right = stack[sp]; int rp = prec_stack[sp]; sp--;
             String left = stack[sp]; int lp = prec_stack[sp]; sp--;
             

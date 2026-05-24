@@ -487,6 +487,7 @@ window.cycleMIDIChannel = function(e) {
 
 /**
  * Queries WASM memory to seamlessly load the C++ hardware default patches.
+ * Automatically translates Infix presets to RPN if STACK mode is active.
  */
 async function loadPreset() {
     if (!wasm || !wasm.wasm_get_preset_formula) return;
@@ -513,7 +514,6 @@ async function loadPreset() {
     const rate = wasm.wasm_get_preset_rate(currentBank, currentPatch);
     const mode = wasm.wasm_get_preset_mode(currentBank, currentPatch);
 
-    formulaInput.value = str;
     isFloatbeat = (mode === 1);
     
     const formatBtn = document.getElementById('format-btn');
@@ -544,6 +544,19 @@ async function loadPreset() {
     scope.clearCanvas();
     scope.drawBuffer = [];
     
+    if (is_rpn) {
+        const encoder = new TextEncoder();
+        const encoded = encoder.encode(str);
+        view.set(encoded, inputPtr);
+        view[inputPtr + encoded.length] = 0;
+        
+        wasm.wasm_compile(false);
+        
+        formulaInput.value = getDecompiledText(true);
+    } else {
+        formulaInput.value = str;
+    }
+
     compile(formulaInput.value);
 
     autoExpand();

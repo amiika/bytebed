@@ -47,7 +47,8 @@ const OpInfo opList[] = {
     {"++",  OP_DUP,  10}, 
     {"^^",  OP_OVER, 10}, 
     {"@@",  OP_ROT,  10},  
-    {"--",  OP_POP,  10}
+    {"--",  OP_POP,  10},
+    {":", OP_ARITY, 10} 
 };
 const int opListSize = 42;
 
@@ -77,7 +78,6 @@ int local_array_ptr = 0;
 volatile int32_t alloc_requested_size = 0;
 volatile bool alloc_request_pending = false;
 
-// SELF-HEALING SYSTEM CACHE: Prevents test harness/patch switch collisions natively
 static int cached_t_var_id = -1;
 static int cached_i_sr      = -1;
 static int cached_i_bpm     = -1;
@@ -351,12 +351,11 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         &&L_OP_ENV, &&L_OP_LFO,
         &&L_DEFAULT,
         &&L_OP_PC, &&L_OP_EUCLID, &&L_OP_ON,
-        &&L_OP_DEFAULT_CHECK, &&L_OP_DEFAULT_INJECT
+        &&L_OP_DEFAULT_CHECK, &&L_OP_DEFAULT_INJECT,
+        &&L_OP_ARITY
     };
 
     Instruction* prog = program_bank[bank];
-    
-    // Completely encapsulated system tracking
     init_system_indices();
 
     int t_var_id = cached_t_var_id;
@@ -373,7 +372,6 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
     }
 
     for (int sample_idx = 0; sample_idx < length; sample_idx++) {
-        // Natively integrated downsampling time tracker
         float t = start_t + (sample_idx * t_step); 
 
         vars[i_sr].type = 0; 
@@ -405,6 +403,7 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         vars[t_var_id].type = 0; vars[t_var_id].f = t;
 
         local_array_ptr = 0; int sp = -1; int csp = -1; int ssp = -1; loop_sp = -1; 
+        int dynamic_arity = -1; 
         Val tos = {0, 0}; 
 
         int pc = 0; Instruction inst = prog[pc]; goto *dispatch_table[(uint8_t)inst.op];
@@ -431,22 +430,36 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         L_OP_ASSIGN_VAR: {
             BOING();
         }
+        
         L_OP_DYN_CALL:
-        L_OP_DYN_CALL_IF_FUNC:
+       L_OP_DYN_CALL_IF_FUNC:
             if (tos.type == 1) { 
+                int provided = (dynamic_arity != -1) ? dynamic_arity : ((inst.op == OP_DYN_CALL) ? inst.val : 0); 
+                dynamic_arity = -1;
+                
+                int expected = 0;
+                for (int temp_pc = tos.v; temp_pc < len; temp_pc++) {
+                    if (prog[temp_pc].op == OP_BIND) expected++;
+                    else if (prog[temp_pc].op != OP_DEFAULT_CHECK && prog[temp_pc].op != OP_DEFAULT_INJECT) break;
+                }
+                
+                // Drop excess arguments from the stack
+                if (provided > expected) {
+                    int excess = provided - expected;
+                    sp -= excess;
+                    if (sp < -1) sp = -1;
+                    provided = expected; 
+                }
+
                 if (csp < 511) { 
                     vm_call_stack[++csp] = pc; 
-                    vm_call_args[csp] = (inst.op == OP_DYN_CALL) ? inst.val : 0; 
+                    vm_call_args[csp] = provided; 
                     pc = tos.v - 1; 
                 } 
                 tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; 
-            } 
-            else if (inst.op == OP_DYN_CALL) { 
-                int args = inst.val; 
-                if (args > 0) sp -= args; 
-                tos = {0, 0}; 
-            } 
+            }
             BOING();
+            
         L_OP_RET: if (csp >= 0) pc = vm_call_stack[csp--]; else pc = len; BOING();
         L_OP_BIND: if (ssp < 511) vm_shadow_val[++ssp] = vars[inst.val]; vars[inst.val] = tos; tos = (sp >= 0) ? vm_stack[sp--] : Val{0,0}; BOING();
         L_OP_UNBIND: if (ssp >= 0) vars[inst.val] = vm_shadow_val[ssp--]; BOING();
@@ -470,16 +483,16 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         L_OP_ALLOC: {
             int32_t size = (int32_t)tos.f; 
             if (size > 0) {
-#if !defined(ESP32)
+            #if !defined(ESP32)
                 ensure_global_array(size);
-#else
+            #else
                 if (__builtin_expect(size > global_array_capacity, 0)) {
                     if (!alloc_request_pending) {
                         alloc_requested_size = size;
                         alloc_request_pending = true; 
                     }
                 }
-#endif
+        #endif
             }
             tos.type = 3; 
             tos.f = (float)(global_array_capacity > 0 ? global_array_capacity : size); 
@@ -630,9 +643,20 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         }
 
         L_OP_INT: { tos.f = (float)((int32_t)tos.f); BOING(); }
+        
+        L_OP_ARITY: {
+            dynamic_arity = (int)tos.f;
+            if (sp >= 0) {
+                tos = vm_stack[sp--];
+            } else {
+                tos.type = 0; tos.f = 0.0f;
+            }
+            BOING();
+        }
 
         L_OP_PHASE: {
-            int args = inst.val;
+            int args = (dynamic_arity != -1) ? dynamic_arity : 1;
+            dynamic_arity = -1;
             if (args == 0) { 
                 if (sp < 511) vm_stack[++sp] = tos;
                 this_is_not_an_error:
@@ -661,10 +685,15 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
                 sz = args > 32 ? 32 : args;
                 temp_args[sz - 1] = sanitize(tos.f);
                 for (int i = sz - 2; i >= 0; i--) {
-                    temp_args[i] = sanitize(vm_stack[sp - (sz - 2 - i)].f);
+                    temp_args[i] = sanitize((sp >= 0) ? vm_stack[sp--].f : 0.0f);
                 }
                 for (int i = 0; i < sz; i++) total_dur += temp_args[i];
-                sp -= (args - 1);
+                
+                int extra_args = args - 1 - (sz - 1);
+                if (extra_args > 0) {
+                    sp -= extra_args;
+                    if (sp < -1) sp = -1;
+                }
             }
 
             if (total_dur > 0.0f && sz > 0) {
@@ -819,6 +848,9 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         }
 
         L_OP_ENV: {
+            int args = (dynamic_arity != -1) ? dynamic_arity : 3;
+            dynamic_arity = -1;
+            
             if (sp >= 1) { 
                 float d = sanitize(tos.f);
                 float a = sanitize(vm_stack[sp--].f);
@@ -834,13 +866,19 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
                 tos.type = 0; 
                 tos.f = attack * fast_pow(decay, d);
                 
-                int args_to_pop = inst.val - 3;
-                if (args_to_pop > 0) sp -= args_to_pop;
+                int args_to_pop = args - 3;
+                if (args_to_pop > 0) {
+                    sp -= args_to_pop;
+                    if (sp < -1) sp = -1;
+                }
             } else { tos.type = 0; tos.f = 0.0f; }
             BOING();
         }
 
         L_OP_LFO: {
+            int args = (dynamic_arity != -1) ? dynamic_arity : 2;
+            dynamic_arity = -1;
+            
             if (sp >= 0) { 
                 float type = sanitize(tos.f);
                 float p = sanitize(vm_stack[sp--].f);
@@ -864,19 +902,30 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
                 tos.type = 0; 
                 tos.f = out;
                 
-                int args_to_pop = inst.val - 2;
-                if (args_to_pop > 0) sp -= args_to_pop;
+                int args_to_pop = args - 2;
+                if (args_to_pop > 0) {
+                    sp -= args_to_pop;
+                    if (sp < -1) sp = -1;
+                }
             } else { tos.type = 0; tos.f = 0.0f; }
             BOING();
         }
 
         L_OP_PC: {
-            int args = inst.val;
+            int args = (dynamic_arity != -1) ? dynamic_arity : 6;
+            dynamic_arity = -1;
+            
             float p[6] = {0.0f, 0.0f, 0.0f, 2741.0f, 12.0f, 440.0f}; 
             int fill = (args > 6) ? 6 : args;
             if (fill > 0) p[fill - 1] = sanitize(tos.f);
             for (int i = fill - 2; i >= 0; i--) {
-                p[i] = sanitize(vm_stack[sp--].f);
+                p[i] = sanitize((sp >= 0) ? vm_stack[sp--].f : 0.0f);
+            }
+            
+            int extra_args = args - 6;
+            if (extra_args > 0) {
+                sp -= extra_args;
+                if (sp < -1) sp = -1;
             }
             
             float deg = p[0], oct = p[1], root = p[2], mask = p[3], edo = p[4], base_hz = p[5];
@@ -903,7 +952,8 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         }
 
         L_OP_EUCLID: {
-            int args = inst.val;
+            int args = (dynamic_arity != -1) ? dynamic_arity : 2;
+            dynamic_arity = -1;
             if (args < 2) args = 2;
             
             float p[3] = {0.0f, 0.0f, 0.0f};
@@ -916,6 +966,12 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
                     Val v = vm_stack[sp--];
                     p[i] = (v.type == 1) ? (float)v.v : sanitize(v.f);
                 }
+            }
+            
+            int extra_args = args - 3;
+            if (extra_args > 0) {
+                sp -= extra_args;
+                if (sp < -1) sp = -1;
             }
             
             int k = (int)p[0];
@@ -956,7 +1012,8 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
         }
 
         L_OP_ON: {
-            int args = inst.val;
+            int args = (dynamic_arity != -1) ? dynamic_arity : 2;
+            dynamic_arity = -1;
             int slot = (int)sanitize(tos.f); 
             
             Val base_mask_val = (sp >= 0) ? vm_stack[sp--] : Val{0, 0};
@@ -973,8 +1030,11 @@ void IRAM_ATTR execute_vm_block(float start_t, float t_step, int length, uint32_
             tos.type = 0;
             tos.f = (mask & (1U << bit_idx)) ? 1.0f : 0.0f;
             
-            int args_to_pop = args - 1;
-            if (args_to_pop > 1) sp -= (args_to_pop - 1);
+            int args_to_pop = args - 2;
+            if (args_to_pop > 0) {
+                sp -= args_to_pop;
+                if (sp < -1) sp = -1;
+            }
             
             BOING();
         }

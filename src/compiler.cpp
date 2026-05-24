@@ -300,7 +300,9 @@ bool compileInfix(String input, bool reset_t) {
                             program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
                             ot--;
                         } else if (os[ot] == OP_PHASE || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON) {
-                            program_bank[target][len++] = {os[ot--], (int32_t)args}; 
+                            program_bank[target][len++] = {OP_VAL, setF((float)args)};
+                            program_bank[target][len++] = {OP_ARITY, 0};
+                            program_bank[target][len++] = {os[ot--], 0}; 
                         } else {
                             program_bank[target][len++] = {os[ot--], 0}; 
                         }
@@ -413,7 +415,7 @@ bool compileInfix(String input, bool reset_t) {
             
             p++; 
         }
-                else if (*p == '=' && *(p+1) != '=' && *(p+1) != '>') {
+        else if (*p == '=' && *(p+1) != '=' && *(p+1) != '>') {
             if (len > 0 && program_bank[target][len - 1].op == OP_AT) {
                 len--; os[++ot] = OP_STORE_AT; os_id[ot] = 0; p++; expect_op = false;
             } else {
@@ -503,8 +505,6 @@ bool compileRPN(String input) {
     bool current_has_pending_def = false;
     int cp_cnt = 0;
     bool parsing_params = false;
-
-    int compiler_pending_arity = -1;
 
     for (int i = 0; i < tok_cnt; i++) {
         if (len >= 512) P_ERR("ERR: PROG>512", "RPN Error: Program exceeds 512 instructions");
@@ -649,9 +649,11 @@ bool compileRPN(String input) {
         }
         else if (s == ":") {
             if (len > 0 && program_bank[target][len - 1].op == OP_VAL) {
-                compiler_pending_arity = (int)getF(program_bank[target][len - 1].val);
+                float val = getF(program_bank[target][len - 1].val);
                 len--; 
-            } else P_ERR("ERR: :", "RPN Error: Invalid arity specifier");
+                program_bank[target][len++] = {OP_VAL, setF(val)};
+                program_bank[target][len++] = {OP_ARITY, 0};
+            } else P_ERR("ERR: :", "RPN Error: : must follow a numeric value");
         }
         else {
             if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1])) || (s.startsWith("-.") && s.length() > 2 && isdigit(s[2]))) {
@@ -672,7 +674,7 @@ bool compileRPN(String input) {
                 bool is_math = false;
                 for (int _m = 0; _m < mathLibrarySize; _m++) {
                     if (s == mathLibrary[_m].name) { 
-                        program_bank[target][len++] = {mathLibrary[_m].code, (int32_t)((mathLibrary[_m].code == OP_PHASE || mathLibrary[_m].code == OP_ENV || mathLibrary[_m].code == OP_LFO || mathLibrary[_m].code == OP_PC || mathLibrary[_m].code == OP_EUCLID || mathLibrary[_m].code == OP_ON) ? 1 : 0)}; 
+                        program_bank[target][len++] = {mathLibrary[_m].code, 0}; 
                         is_math = true; 
                         break; 
                     }
@@ -701,21 +703,12 @@ bool compileRPN(String input) {
                     int id = getVarId(s);
                     program_bank[target][len++] = {OP_LOAD, (int32_t)id};
                     
-                    if (compiler_pending_arity != -1) {
-                        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)compiler_pending_arity};
-                        compiler_pending_arity = -1;
-                    } else if (id < 64 && rpn_func_arity[id] != -1) {
+                    bool has_explicit = (len >= 3 && program_bank[target][len-2].op == OP_ARITY);
+                    
+                    if (!has_explicit && id < 64 && rpn_func_arity[id] != -1) {
                         program_bank[target][len++] = {OP_DYN_CALL, (int32_t)rpn_func_arity[id]};
                     } else {
                         program_bank[target][len++] = {OP_DYN_CALL_IF_FUNC, 0};
-                    }
-                } else {
-                    if (compiler_pending_arity != -1) {
-                        OpCode top_op = program_bank[target][len - 1].op;
-                        if (top_op == OP_PHASE || top_op == OP_ENV || top_op == OP_LFO || top_op == OP_PC || top_op == OP_EUCLID || top_op == OP_ON || top_op == OP_DYN_CALL) {
-                            program_bank[target][len - 1].val = (int32_t)compiler_pending_arity;
-                        }
-                        compiler_pending_arity = -1;
                     }
                 }
             }
@@ -919,7 +912,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
 
         if (func_depth == 0) {
             int produces = 1;
-            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT) produces = 0;
+            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT || op == OP_ARITY) produces = 0;
             else if (op == OP_DUP || op == OP_SWAP) produces = 2;
             else if (op == OP_ROT || op == OP_OVER) produces = 3;
             
@@ -927,12 +920,16 @@ static int get_expr_start(uint8_t target, int end_pc) {
             if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_LOOP_PREP || op == OP_SWAP || op == OP_OVER) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON || op == OP_ROT) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP || op == OP_LOAD_STR) consumes = 1;
-            else if (op == OP_PHASE || op == OP_ENV || op == OP_LFO || op == OP_PC || op == OP_EUCLID || op == OP_ON) consumes = program_bank[target][pc].val; 
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP || op == OP_LOAD_STR || op == OP_ARITY) consumes = 1;
             else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
+            else if (op == OP_PHASE || op == OP_ENV || op == OP_LFO || op == OP_PC || op == OP_EUCLID || op == OP_ON) {
+                if (pc >= 2 && program_bank[target][pc-1].op == OP_ARITY && program_bank[target][pc-2].op == OP_VAL) {
+                    consumes = (int)getF(program_bank[target][pc-2].val);
+                } else consumes = 1; 
+            } 
             
             stack_need = stack_need - produces + consumes;
         }

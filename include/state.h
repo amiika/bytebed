@@ -51,7 +51,8 @@ enum OpCode : uint8_t {
     OP_ENV, OP_LFO,
     OP_COLON,
     OP_PC, OP_EUCLID, OP_ON,
-    OP_DEFAULT_CHECK, OP_DEFAULT_INJECT
+    OP_DEFAULT_CHECK, OP_DEFAULT_INJECT,
+    OP_ARITY 
 };
 
 struct Theme {

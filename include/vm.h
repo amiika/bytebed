@@ -148,7 +148,7 @@ extern const int mathLibrarySize;
 extern const MathFunc shorthands[5];
 extern const int shorthandsSize;
 
-extern const OpInfo opList[42];
+extern const OpInfo opList[43];
 extern const int opListSize;
 
 /**

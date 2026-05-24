@@ -37,6 +37,7 @@ bool validateProgram(uint8_t bank, int len) {
 
     std::unique_ptr<Val[]> v_stack(new Val[512]); int sp = -1;
     std::unique_ptr<int32_t[]> c_stack(new int32_t[512]); int csp = -1;
+    std::unique_ptr<int32_t[]> v_call_args(new int32_t[512]); 
     std::unique_ptr<Val[]> l_vars(new Val[64]);
     std::unique_ptr<Val[]> l_shadow_val(new Val[512]); int l_ssp = -1;
     
@@ -48,6 +49,8 @@ bool validateProgram(uint8_t bank, int len) {
     memset(l_vars.get(), 0, 64 * sizeof(Val));
 
     int steps = 0;
+    int static_arity = -1;
+
     for (int pc = 0; pc < len && pc >= 0; pc++) {
         if (++steps > 16384) return true;
         Instruction& inst = program_bank[bank][pc];
@@ -86,27 +89,46 @@ bool validateProgram(uint8_t bank, int len) {
                 pc += inst.val - 1; break; 
             
             case OP_DYN_CALL:
-                if (sp < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on dynamic call at PC " + String(pc));
-                if (v_stack[sp].type == 1 && csp < 5) { 
-                    if (csp < 511) { 
-                        c_stack[++csp] = pc; 
-                        pc = v_stack[sp].v - 1; 
-                        sp--;
-                    } else V_ERR("ERR: CALL_OVF @" + String(pc), "Call Stack Overflow at PC " + String(pc));
-                } else {
-                    int args = inst.val;
-                    if (sp >= args) sp -= args; 
-                    v_stack[sp].type = 0; v_stack[sp].f = 0.0f;
+           case OP_DYN_CALL_IF_FUNC: {
+            int provided = (static_arity != -1) ? static_arity : ((inst.op == OP_DYN_CALL) ? inst.val : 0);
+            static_arity = -1;
+            
+            // THE FIX: Add '&& csp < 5' here to prevent recursive lambdas from crashing compilation!
+            if (sp >= 0 && v_stack[sp].type == 1 && csp < 5) { 
+                int expected = 0;
+                for (int temp_pc = v_stack[sp].v; temp_pc < len; temp_pc++) {
+                    if (program_bank[bank][temp_pc].op == OP_BIND) expected++;
+                    else if (program_bank[bank][temp_pc].op != OP_DEFAULT_CHECK && program_bank[bank][temp_pc].op != OP_DEFAULT_INJECT) break;
                 }
-                break;
+                
+                if (provided > expected) {
+                    int excess = provided - expected;
+                    Val func_ref = v_stack[sp];
+                    sp -= excess;
+                    if (sp < 0) sp = 0;
+                    v_stack[sp] = func_ref;
+                    provided = expected;
+                }
 
-            case OP_DYN_CALL_IF_FUNC:
-                if (sp >= 0 && v_stack[sp].type == 1 && csp < 5) { 
+                if (csp < 511) { 
                     c_stack[++csp] = pc; 
+                    v_call_args[csp] = provided;
                     pc = v_stack[sp].v - 1; 
                     sp--;
+                } else V_ERR("ERR: CALL_OVF @" + String(pc), "Call Stack Overflow");
+            } else {
+                if (provided > 0 && sp >= 0) {
+                    Val saved_val = v_stack[sp]; 
+                    sp--; 
+                    if (sp >= provided - 1) sp -= provided; else sp = -1;
+                    if (inst.op == OP_DYN_CALL_IF_FUNC && sp < 511) v_stack[++sp] = saved_val; 
                 }
-                break;
+                if (inst.op == OP_DYN_CALL) {
+                    if (sp < 511) { sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; }
+                }
+            }
+            break;
+        }
 
             case OP_RET:
                 if (csp >= 0) pc = c_stack[csp--];
@@ -182,12 +204,17 @@ bool validateProgram(uint8_t bank, int len) {
                 
             case OP_LOOP_DONE: {
                 if (sp < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on loop done at PC " + String(pc));
-                sp--; 
-                int ltype = (v_loop_ptr >= 0) ? v_loop_types[v_loop_ptr] : 0;
-                sp++; 
+                
+                int ltype = 0;
+                if (v_loop_ptr >= 0) {
+                    ltype = v_loop_types[v_loop_ptr];
+                    sp = v_loop_saved_sp[v_loop_ptr] + 1; 
+                    v_loop_ptr--; 
+                }
+                
                 if (ltype == 0 || ltype == 3) { v_stack[sp].type = 0; }
                 else { v_stack[sp].type = 2; } 
-                if (v_loop_ptr >= 0) v_loop_ptr--; 
+                
                 break;
             }
 
@@ -208,16 +235,34 @@ bool validateProgram(uint8_t bank, int len) {
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on RAND at PC " + String(pc));
                 sp++; v_stack[sp].type = 0; v_stack[sp].f = 0.0f; break;
 
+            case OP_ARITY:
+                if (sp >= 0) static_arity = (int)v_stack[sp--].f;
+                break;
+
             case OP_PHASE: case OP_ENV: case OP_LFO:
-            case OP_PC: case OP_EUCLID: case OP_ON:
-                if (inst.val > 0) {
-                    if (sp < inst.val - 1) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow at PC " + String(pc));
-                    sp -= (inst.val - 1);
+            case OP_PC: case OP_EUCLID: case OP_ON: {
+                int args = 1;
+                if (inst.op == OP_ENV) args = 3;
+                else if (inst.op == OP_LFO || inst.op == OP_EUCLID || inst.op == OP_ON) args = 2;
+                else if (inst.op == OP_PC) args = 6;
+                
+                if (static_arity != -1) {
+                    args = static_arity;
+                    static_arity = -1;
+                }
+                
+                if (args > 0) {
+                    if (sp < args - 1) {
+                        sp = -1; 
+                    } else {
+                        sp -= (args - 1);
+                    }
                 } else {
                     if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow at PC " + String(pc));
                     sp++; v_stack[sp].type = 0;
                 }
                 break;
+            }
 
             case OP_DUP:
                 if (sp < 0) V_ERR("ERR: UDF @" + String(pc), "Stack Underflow on DUP at PC " + String(pc));
@@ -248,8 +293,14 @@ bool validateProgram(uint8_t bank, int len) {
                 sp++; v_stack[sp] = v_stack[sp-2];
                 break;
 
-            case OP_DEFAULT_CHECK:
+            case OP_DEFAULT_CHECK: {
+                int required = inst.val;
+                int provided = (csp >= 0) ? v_call_args[csp] : 0;
+                if (provided >= required) {
+                    pc++; 
+                }
                 break;
+            }
             case OP_DEFAULT_INJECT:
                 if (sp >= 511) V_ERR("ERR: OVF @" + String(pc), "Stack Overflow on OP_DEFAULT_INJECT at PC " + String(pc));
                 sp++; v_stack[sp].type = 0; v_stack[sp].f = getF(inst.val);

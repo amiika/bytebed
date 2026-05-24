@@ -17,11 +17,6 @@ struct TestCase {
     bool checkRoundTrip; 
 };
 
-/**
- * Executes the integrated system engine verification test suite.
- * Iterates through all test items without failing early, logging errors directly.
- * @return Empty string if all tests pass, or a summary message if failures occurred.
- */
 String runBytebeatTestSuite() {
     TestCase suite[] = {
         // --- 1. CORE OPERATORS ---
@@ -283,7 +278,24 @@ String runBytebeatTestSuite() {
         {"bpm = 250; beat = 0.3; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false},
         {"bpm = 250; beat = 1.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 30, false, false},
         {"bpm = 250; beat = 1.5; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 40, false, false},
-        {"bpm = 250; beat = 3.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false}
+        {"bpm = 250; beat = 3.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false},
+
+        // --- 17. DYNAMIC ARGUMENT COUNT & EXPLICIT DEFAULT PARAMETERS ---
+        {"0 0 60 1 12 440 6 : pc 100 /", 0,   2, true,  true},  
+        {"beat = 4.0; phase(1.5, 0.5)",  0,   4, false, true},  
+        {"4.0 beat = 1.5 0.5 2 : phase", 0,   4, true,  true},  
+        {"4.0 beat = 1.0 1.0 2 : phase 10 *", 0, 40, true,  true},  
+        {"2 4 0 3 : euclid",             0, 0x50000000, true, true}, 
+        {"0.5 1.0 1.0 3 : env 100 *",    0,  25, true,  true},
+        {"( x y ) { x y + } myfunc = 10 20 2 : myfunc", 0, 30, true, true},
+        {"( x ) { x 5 * } h = 10 1 : h", 0, 50, true, true},
+        
+        {"( x 2 y = ) { x y + } h = 1 1 : h", 0, 3, true, true}, 
+        {"( x 3 y = ) { x y + } h = 1 1 : h", 0, 4, true, true}, 
+        {"foo = (a, b=1, c=2)=>{a+b+c}; foo(1)", 0, 4, false, true},
+        {"f=(a,b=1)=>{a+b}; f(1)", 0, 2, false, true},
+        {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1)", 0, 4, false, true},
+        {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1, 10)", 0, 13, false, true}
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);
@@ -304,7 +316,7 @@ String runBytebeatTestSuite() {
         uint32_t res1 = execute_vm(suite[i].t);
         if (res1 != suite[i].expected) {
             failed_count++;
-            printf("DEBUG: Test %d [%s] failed at t=%d. Expected: 0x%08X, Got: 0x%08X\n", 
+            printf("DEBUG: Test %d [%s] failed at t=%d.\n  -> Expected: 0x%08X, Got: 0x%08X\n", 
                    i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
             if (first_error_msg == "") {
                 first_error_msg = "Fail " + String(i+1) + ": Init exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res1) + "\nOn:\n" + String(suite[i].expr);
@@ -317,14 +329,17 @@ String runBytebeatTestSuite() {
             bool oppOk = (!suite[i].isRpn) ? compileRPN(oppStr) : compileInfix(oppStr, true);
             if (!oppOk) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed opposite round-trip compiler pass.\n", i + 1, suite[i].expr);
+                printf("DEBUG: Test %d [%s] failed opposite round-trip compiler pass.\n  -> Decompiled string: %s\n", i + 1, suite[i].expr, oppStr.c_str());
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Opp RT Compile\nDecompiled:\n" + oppStr;
                 continue;
             }
             
             uint32_t res2 = execute_vm(suite[i].t);
             if (res2 != suite[i].expected) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed round-trip check execution pass.\n", i + 1, suite[i].expr);
+                printf("DEBUG: Test %d [%s] failed round-trip check execution pass.\n  -> Decompiled string: %s\n  -> Expected: 0x%08X, Got: 0x%08X\n", 
+                       i + 1, suite[i].expr, oppStr.c_str(), suite[i].expected, res2);
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Opp RT Exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res2) + "\nDecomp:\n" + oppStr;
                 continue;
             }
 
@@ -332,21 +347,24 @@ String runBytebeatTestSuite() {
             bool origOk = suite[i].isRpn ? compileRPN(origStr) : compileInfix(origStr, true);
             if (!origOk) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed native restoration compiler pass.\n", i + 1, suite[i].expr);
+                printf("DEBUG: Test %d [%s] failed native restoration compiler pass.\n  -> Restored string: %s\n", i + 1, suite[i].expr, origStr.c_str());
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Native Rest. Compile\nRestored:\n" + origStr;
                 continue;
             }
             
             uint32_t res3 = execute_vm(suite[i].t);
             if (res3 != suite[i].expected) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed native restoration execution validation.\n", i + 1, suite[i].expr);
+                printf("DEBUG: Test %d [%s] failed native restoration execution validation.\n  -> Restored string: %s\n  -> Expected: 0x%08X, Got: 0x%08X\n", 
+                       i + 1, suite[i].expr, origStr.c_str(), suite[i].expected, res3);
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Native Rest. Exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res3) + "\nRestored:\n" + origStr;
                 continue;
             }
         }
     }
 
     if (failed_count > 0) {
-        printf("\n>>> FAILURE SUMMARY: %d out of %d tests failed. <<<\n\n", failed_count, num_tests);
+        printf("\n>>> TOTAL VERIFICATION FAILURE SUMMARY: %d out of %d tests failed. <<<\n\n", failed_count, num_tests);
         return first_error_msg;
     }
     return ""; 
