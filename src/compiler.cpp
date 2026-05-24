@@ -70,6 +70,46 @@ static String stripComments(const String& input) {
 }
 
 /**
+ * Universal high-performance numeric parser for the VM.
+ * Supports Binary (0b), Hex (0x), Decimal, and standard floats.
+ * Safely advances the pointer past the parsed number.
+ */
+static bool parseNumber(const char*& p, float& outVal) {
+    const char* start = p;
+    bool is_neg = false;
+    
+    if (*p == '-') {
+        is_neg = true;
+        p++;
+    }
+
+    if (*p == '0' && (*(p+1) == 'b' || *(p+1) == 'B')) {
+        p += 2;
+        uint32_t val = 0;
+        while (*p == '0' || *p == '1') {
+            val = (val << 1) | (*p++ - '0');
+        }
+        outVal = is_neg ? -(float)val : (float)val;
+        return true;
+    }
+
+    p = start; 
+    if (isdigit(*p) || (*p == '-' && isdigit(*(p+1))) || (*p == '.' && isdigit(*(p+1))) || (*p == '-' && *(p+1) == '.' && isdigit(*(p+2)))) {
+        char* next_p;
+        outVal = strtof(p, &next_p);
+        
+        if (next_p > p) {
+            if (*(next_p - 1) == '.' && isalpha(*next_p)) {
+                next_p--;
+            }
+            p = next_p;
+            return true;
+        }
+    }
+    return false;
+}
+
+/**
  * Compiles an infix formula into VM bytecode.
  * @param input The infix expression to compile
  * @param reset_t Determines if the playback time should be reset
@@ -130,18 +170,13 @@ bool compileInfix(String input, bool reset_t) {
         if (isspace(*p)) { p++; continue; }
         
         if (isdigit(*p) || (*p == '.' && isdigit(*(p+1)))) { 
-            if (expect_op) P_ERR("ERR: .?", "Compile Error: Expected operator before number");
-            expect_op = true;
-            
-            char* next_p;
-            float val = strtof(p, &next_p);
-            
-            if (next_p > p && *(next_p - 1) == '.' && isalpha(*next_p)) {
-                next_p--; 
+            float val;
+            if (parseNumber(p, val)) {
+                if (expect_op) P_ERR("ERR: .?", "Compile Error: Expected operator before number");
+                expect_op = true;
+                program_bank[target][len++] = {OP_VAL, setF(val)}; 
+                continue;
             }
-            
-            p = next_p;
-            program_bank[target][len++] = {OP_VAL, setF(val)}; 
         }
         else if (isalpha(*p)) { 
             wordBuffer = ""; 
@@ -510,7 +545,11 @@ bool compileRPN(String input) {
         if (len >= 512) P_ERR("ERR: PROG>512", "RPN Error: Program exceeds 512 instructions");
         String s = tokens[i];
         bool negate = false;
-        if (s.startsWith("-") && s.length() > 1 && !isdigit(s[1]) && s[1] != '.' && s != "-=") { negate = true; s = s.substring(1); }
+        
+        if (s.startsWith("-") && s.length() > 1 && s != "-=") { 
+            negate = true; 
+            s = s.substring(1); 
+        }
 
         if (s.startsWith("&") && s.length() > 1 && isalpha(s[1])) {
             int id = getVarId(s.substring(1));
@@ -635,9 +674,13 @@ bool compileRPN(String input) {
             program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
         }
         else if (parsing_params) {
-            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1]))) {
-                current_pending_def_val = strtof(s.c_str(), NULL);
+            const char* p_tok = s.c_str();
+            float val;
+            
+            if (parseNumber(p_tok, val) && *p_tok == '\0') {
+                current_pending_def_val = negate ? -val : val;
                 current_has_pending_def = true;
+                negate = false; 
             } else {
                 if (cp_cnt < 8) {
                     current_params[cp_cnt] = getVarId(s);
@@ -656,8 +699,12 @@ bool compileRPN(String input) {
             } else P_ERR("ERR: :", "RPN Error: : must follow a numeric value");
         }
         else {
-            if (isdigit(s[0]) || (s[0] == '-' && isdigit(s[1])) || (s[0] == '.' && isdigit(s[1])) || (s.startsWith("-.") && s.length() > 2 && isdigit(s[2]))) {
-                program_bank[target][len++] = {OP_VAL, setF(strtof(s.c_str(), NULL))};
+            const char* p_tok = s.c_str();
+            float val;
+            
+            if (parseNumber(p_tok, val) && *p_tok == '\0') {
+                if (negate) { val = -val; negate = false; }
+                program_bank[target][len++] = {OP_VAL, setF(val)};
             }
             else if (s == ";") program_bank[target][len++] = {OP_POP, 0}; 
             else if (s == "?") program_bank[target][len++] = {OP_COND, 0};
