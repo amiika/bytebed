@@ -24,6 +24,7 @@ struct Val {
         int32_t v;
         float f;
     };
+    int32_t len;
 };
 
 /**
@@ -61,7 +62,7 @@ String decompile(bool to_rpn);
  * @param t The absolute time step
  * @return The generated 32-bit native audio sample stream word or mask
  */
-uint32_t execute_vm(int32_t t);
+uint32_t executeVm(int32_t t);
 
 /**
  * Executes a block of bytecode for audio generation.
@@ -70,7 +71,7 @@ uint32_t execute_vm(int32_t t);
  * @param length The number of samples to generate
  * @param out_buf The output buffer to write to
  */
-void execute_vm_block(float start_t, float t_step, int length, uint32_t* out_buf);
+void executeVmBlock(float start_t, float t_step, int length, uint32_t* out_buf);
 
 /**
  * Updates IMU variables in the VM state.
@@ -120,13 +121,13 @@ extern int anchor_sample_rate;
 /**
  * Clears the global array memory.
  */
-void clear_global_array();
+void clearGlobalArray();
 
 /**
  * Ensures the global array has the requested capacity.
  * @param req_size The required capacity size
  */
-void ensure_global_array(int32_t req_size);
+void ensureGlobalArray(int32_t req_size);
 
 extern String last_vm_error;
 
@@ -142,7 +143,7 @@ struct OpInfo {
     int precedence;
 };
 
-extern const MathFunc mathLibrary[29];
+extern const MathFunc mathLibrary[32];
 extern const int mathLibrarySize;
 
 extern const MathFunc shorthands[5];

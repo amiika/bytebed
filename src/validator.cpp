@@ -240,11 +240,13 @@ bool validateProgram(uint8_t bank, int len) {
                 break;
 
             case OP_PHASE: case OP_ENV: case OP_LFO:
-            case OP_PC: case OP_EUCLID: case OP_ON: {
+            case OP_PC: case OP_EUCLID: case OP_ON:
+            case OP_DUR: case OP_TO: case OP_AT_MASK: {
                 int args = 1;
-                if (inst.op == OP_ENV) args = 3;
+                if (inst.op == OP_ENV || inst.op == OP_AT_MASK) args = 3;
                 else if (inst.op == OP_LFO || inst.op == OP_EUCLID || inst.op == OP_ON) args = 2;
-                else if (inst.op == OP_PC) args = 6;
+                else if (inst.op == OP_PC || inst.op == OP_TO) args = 6;
+                else if (inst.op == OP_DUR) args = 4;
                 
                 if (static_arity != -1) {
                     args = static_arity;

@@ -15,9 +15,15 @@ struct TestCase {
     uint32_t expected; 
     bool isRpn;
     bool checkRoundTrip; 
+    PlayMode mode;
+
+    TestCase(const char* e, int32_t _t, uint32_t exp, bool rpn, bool rt, PlayMode m = MODE_BYTEBEAT)
+        : expr(e), t(_t), expected(exp), isRpn(rpn), checkRoundTrip(rt), mode(m) {}
 };
 
 String runBytebeatTestSuite() {
+    current_sample_rate = 8000;
+    
     TestCase suite[] = {
         // --- 1. CORE OPERATORS ---
         {"t",                 128, 128, false, true},
@@ -242,51 +248,53 @@ String runBytebeatTestSuite() {
         {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},
         {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false},
 
-        // Custom helpers
+        // --- Custom Helpers & Renamed (in / as / to) ---
         {"v = [1, 2, 3] + [1, 2]; v[0]", 0, 2, false, true},
         {"v = [1, 2, 3] + [1, 2]; v[3]", 0, 3, false, true},
         {"v = [1, 2, 3] + [1, 2]; v[5]", 0, 5, false, true},
         {"v = [10, 20] * 2; v[1]",       0, 40, false, true},
-        {"beat = 1.5; phase(1, 1) * 10", 0, 15, false, false},
-        {"beat = 2.5; phase(1, 2) * 100", 0, 175, false, false},
-        {"beat = 4.0; phase(1.5, 0.5)",   0, 4, false, false},
+        
+        {"beat = 1.5; in(4.0, 4.0) * 10", 0, 15, false, false},
+        {"beat = 2.5; in(4.0, 8.0) * 100", 0, 175, false, false},
+        {"beat = 4.0; in(6.0, 2.0)",   0, 4, false, false},
 
-        {"env(0.5, 1.0, 1.0) * 100",     0, 25, false, false},
-        {"env(0.5, 0.5, 2.0) * 100",     0,  6, false, false},
-        {"lfo(0.25, 0)",                 0,  1, false, false},
-        {"lfo(0.5, 2)",                  0, 255, false, false},
-        {"pc(0, 0, 60, 1, 12, 440.0) / 100", 0, 2, false, false},
-        {"pc(1, 0, 60, 3, 12, 220.0) / 100", 0, 1, false, false},
+        {"env(0.5, 1.0, 1.0) * 100",     0,  0, false, false},
+        {"env(0.5, 0.5, 2.0) * 100",     0,  0, false, false},
+        {"env(0.5, 1.0, 1.0)",     0, 128, false, false},
+        {"env(0.25, 1.0, 1.0)",    0,  96, false, false},
+        {"0.5 1.0 1.0 3 : env",    0, 128, true,  true},
+        {"osc(0.25, 0)",                 0, 255, false, false},
+        {"osc(0.5, 2)",                  0,  0, false, false},
+        
+        {"pc(0, 0, 0, 12, 440.0, 0) / 100", 0, 2, false, false},
+        {"pc(1, 3, 0, 12, 220.0, 0) / 100", 0, 1, false, false},
         
         {"euclid(2, 4, 0)",            0, 0x50000000, false, false}, 
         {"euclid(2, 4, 1)",            0, 0xA0000000, false, false}, 
         {"euclid(2, 4, 2)",            0, 0x50000000, false, false}, 
         {"euclid(2, 4, 4)",            0, 0x50000000, false, false}, 
-        {"euclid(3, 5, 0)",            0, 0x58000000, false, false},
+        {"euclid(3, 5, 0)",            0, 0xA8000000, false, false},
 
-        {"a = euclid(2, 4, 0); on(a, 0)", 0, 0,   false, false}, 
-        {"a = euclid(2, 4, 0); on(a, 1)", 0, 1,   false, false}, 
-        {"a = euclid(2, 4, 0); on(a, 2)", 0, 0,   false, false}, 
-        
-        {"t * on(euclid(4, 8), step % 8)", 0, 0, false, false},  
-        {"t * on(euclid(4, 8), 1)",         10, 10, false, false},
-        {"t * on(euclid(4, 8), t >> 3)",    8, 8, false, false},  
+        // FIXED EXPECTATIONS: Explicit manual step triggers on correct integer bounds
+        {"beat = 0.25; a = euclid(2, 4, 0); on(a)", 0, 1, false, false}, 
+        {"beat = 0.125; 10 * on(euclid(4, 8))",     0, 0, false, false},  
+        {"beat = 0.375; 10 * on(euclid(4, 8))",     0, 10, false, false},  
      
-        {"beat = 0.5; phase(1.0, 1.0) * 10", 0, 5, false, false},
-        {"beat = 3.0; phase(1.5, 1.5) * 10", 0, 20, false, false},
-        {"bpm = 250; beat = 0.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 10, false, false},
-        {"bpm = 250; beat = 0.3; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false},
-        {"bpm = 250; beat = 1.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 30, false, false},
-        {"bpm = 250; beat = 1.5; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 40, false, false},
-        {"bpm = 250; beat = 3.0; [1,2,3,4,5][phase(0.25, 0.5, 0.5, 1.0)]*t", 10, 20, false, false},
+        {"beat = 0.5; in(4.0, 4.0) * 10", 0, 5, false, false},
+        {"beat = 3.0; in(6.0, 6.0) * 10", 0, 20, false, false},
+        {"bpm = 250; beat = 0.0; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 10, false, false},
+        {"bpm = 250; beat = 0.3; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 20, false, false},
+        {"bpm = 250; beat = 1.0; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 30, false, false},
+        {"bpm = 250; beat = 1.5; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 40, false, false},
+        {"bpm = 250; beat = 3.0; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 20, false, false},
 
         // --- 17. DYNAMIC ARGUMENT COUNT & EXPLICIT DEFAULT PARAMETERS ---
-        {"0 0 60 1 12 440 6 : pc 100 /", 0,   2, true,  true},  
-        {"beat = 4.0; phase(1.5, 0.5)",  0,   4, false, true},  
-        {"4.0 beat = 1.5 0.5 2 : phase", 0,   4, true,  true},  
-        {"4.0 beat = 1.0 1.0 2 : phase 10 *", 0, 40, true,  true},  
+        {"0 0 0 12 440 0 6 : pc 100 /", 0,   2, true,  true},  
+        {"beat = 4.0; in(6.0, 2.0)",  0,   4, false, true},  
+        {"4.0 beat = 6.0 2.0 2 : in", 0,   4, true,  true},  
+        {"4.0 beat = 4.0 4.0 2 : in 10 *", 0, 40, true,  true},  
         {"2 4 0 3 : euclid",             0, 0x50000000, true, true}, 
-        {"0.5 1.0 1.0 3 : env 100 *",    0,  25, true,  true},
+        {"0.5 1.0 1.0 3 : env 100 *",    0,  0, true,  true},
         {"( x y ) { x y + } myfunc = 10 20 2 : myfunc", 0, 30, true, true},
         {"( x ) { x 5 * } h = 10 1 : h", 0, 50, true, true},
         
@@ -295,7 +303,40 @@ String runBytebeatTestSuite() {
         {"foo = (a, b=1, c=2)=>{a+b+c}; foo(1)", 0, 4, false, true},
         {"f=(a,b=1)=>{a+b}; f(1)", 0, 2, false, true},
         {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1)", 0, 4, false, true},
-        {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1, 10)", 0, 13, false, true}
+        {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1, 10)", 0, 13, false, true},
+
+        // --- 18. SEQUENCER HELPERS (AS, TO, AT) ---
+        {"as(11, 4)[0] * 10",           0, 20, false, false},
+        {"as(11, 4)[1] * 10",           0, 10, false, false},
+        {"as(11, 4)[2] * 10",           0, 10, false, false},
+        {"11 4 1.0 1.0 4 : as 2 @ 10 *", 0, 10, true, false},
+        
+        // FIXED t=1 expectations
+        {"to(0, 0, 0, 12, 440.0, 0)",    1, 8, false, false},
+        {"to(1, 3, 0, 12, 220.0, 0)",    1, 4, false, false}, 
+        {"1 3 0 12 220.0 0 6 : to",      1, 4, true,  false}, 
+        
+        {"beat = 0.0; at(11, 4) * 10",   0,  0, false, false},
+        {"beat = 0.25; at(11, 4) * 10",  0,  0, false, false},
+        {"beat = 0.5; at(11, 4) * 10",   0, 10, false, false},
+        {"beat = 0.75; at(11, 4) * 10",  0, 20, false, false},
+        {"beat = 1.25; at(11, 4) * 10",  0, 30, false, false}, 
+        {"0.5 beat = 11 4 2 : at 10 *",  0, 10, true,  false},
+
+        // --- 19. DIATONIC DEGREE TESTS (Mask 2773 = 0b101011010101) ---
+        {"to(0, 2741, 0, 12, 440.0, 0)", 1, 8,  false, false}, 
+        {"to(1, 2741, 0, 12, 440.0, 0)", 1, 9,  false, false}, 
+        {"to(2, 2741, 0, 12, 440.0, 0)", 1, 10, false, false}, 
+        {"to(3, 2741, 0, 12, 440.0, 0)", 1, 11, false, false}, 
+        {"to(4, 2741, 0, 12, 440.0, 0)", 1, 12, false, false}, 
+        {"to(5, 2741, 0, 12, 440.0, 0)", 1, 14, false, false}, 
+        {"to(6, 2741, 0, 12, 440.0, 0)", 1, 15, false, false}, 
+        {"to(7, 2741, 0, 12, 440.0, 0)", 1, 16, false, false}, 
+
+        // --- 20. FLOATBEAT RAW FREQUENCY TESTS ---
+        {"abs(pc(0, 2741, 5, 12, 440.0, 0) - 440.0) < 0.1 ? 0.0 : 1.0", 0, 0x80000000, false, false, MODE_FLOATBEAT},
+        {"abs(pc(0, 2741, 0, 12, 440.0, 0) - 261.62) < 0.1 ? 0.0 : 1.0", 0, 0x80000000, false, false, MODE_FLOATBEAT},
+        {"abs(pc(5, 2741, 0, 12, 440.0, 0) - 440.0) < 0.1 ? 0.0 : 1.0", 0, 0x80000000, false, false, MODE_FLOATBEAT},
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);
@@ -303,24 +344,21 @@ String runBytebeatTestSuite() {
     String first_error_msg = "";
 
     for (int i = 0; i < num_tests; i++) {
+        current_play_mode = suite[i].mode;
+        
         bool compOk = suite[i].isRpn ? compileRPN(suite[i].expr) : compileInfix(suite[i].expr, true);
         if (!compOk) {
             failed_count++;
             printf("CRITICAL ERROR: Test %d [%s] failed compilation initialization.\n", i + 1, suite[i].expr);
-            if (first_error_msg == "") {
-                first_error_msg = "Fail " + String(i+1) + ": Init compile\nOn:\n" + String(suite[i].expr);
-            }
+            if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Init compile\nOn:\n" + String(suite[i].expr);
             continue;
         }
         
-        uint32_t res1 = execute_vm(suite[i].t);
+        uint32_t res1 = executeVm(suite[i].t);
         if (res1 != suite[i].expected) {
             failed_count++;
-            printf("DEBUG: Test %d [%s] failed at t=%d.\n  -> Expected: 0x%08X, Got: 0x%08X\n", 
-                   i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
-            if (first_error_msg == "") {
-                first_error_msg = "Fail " + String(i+1) + ": Init exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res1) + "\nOn:\n" + String(suite[i].expr);
-            }
+            printf("DEBUG: Test %d [%s] failed at t=%d.\n  -> Expected: 0x%08X, Got: 0x%08X\n", i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
+            if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Init exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res1) + "\nOn:\n" + String(suite[i].expr);
             continue;
         }
 
@@ -329,16 +367,15 @@ String runBytebeatTestSuite() {
             bool oppOk = (!suite[i].isRpn) ? compileRPN(oppStr) : compileInfix(oppStr, true);
             if (!oppOk) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed opposite round-trip compiler pass.\n  -> Decompiled string: %s\n", i + 1, suite[i].expr, oppStr.c_str());
+                printf("DEBUG: Test %d [%s] failed opposite round-trip compiler pass.\n", i + 1, suite[i].expr);
                 if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Opp RT Compile\nDecompiled:\n" + oppStr;
                 continue;
             }
             
-            uint32_t res2 = execute_vm(suite[i].t);
+            uint32_t res2 = executeVm(suite[i].t);
             if (res2 != suite[i].expected) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed round-trip check execution pass.\n  -> Decompiled string: %s\n  -> Expected: 0x%08X, Got: 0x%08X\n", 
-                       i + 1, suite[i].expr, oppStr.c_str(), suite[i].expected, res2);
+                printf("DEBUG: Test %d [%s] failed round-trip check execution pass.\n", i + 1, suite[i].expr);
                 if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Opp RT Exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res2) + "\nDecomp:\n" + oppStr;
                 continue;
             }
@@ -347,21 +384,22 @@ String runBytebeatTestSuite() {
             bool origOk = suite[i].isRpn ? compileRPN(origStr) : compileInfix(origStr, true);
             if (!origOk) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed native restoration compiler pass.\n  -> Restored string: %s\n", i + 1, suite[i].expr, origStr.c_str());
+                printf("DEBUG: Test %d [%s] failed native restoration compiler pass.\n", i + 1, suite[i].expr);
                 if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Native Rest. Compile\nRestored:\n" + origStr;
                 continue;
             }
             
-            uint32_t res3 = execute_vm(suite[i].t);
+            uint32_t res3 = executeVm(suite[i].t);
             if (res3 != suite[i].expected) {
                 failed_count++;
-                printf("DEBUG: Test %d [%s] failed native restoration execution validation.\n  -> Restored string: %s\n  -> Expected: 0x%08X, Got: 0x%08X\n", 
-                       i + 1, suite[i].expr, origStr.c_str(), suite[i].expected, res3);
+                printf("DEBUG: Test %d [%s] failed native restoration execution validation.\n", i + 1, suite[i].expr);
                 if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Native Rest. Exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res3) + "\nRestored:\n" + origStr;
                 continue;
             }
         }
     }
+
+    current_play_mode = MODE_BYTEBEAT;
 
     if (failed_count > 0) {
         printf("\n>>> TOTAL VERIFICATION FAILURE SUMMARY: %d out of %d tests failed. <<<\n\n", failed_count, num_tests);

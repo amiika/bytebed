@@ -576,7 +576,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         else if (inst.op == OP_ARITY) {
             continue; 
         }
-        else if (inst.op == OP_PHASE || inst.op == OP_ENV || inst.op == OP_LFO || inst.op == OP_PC || inst.op == OP_EUCLID || inst.op == OP_ON) {
+        else if (inst.op == OP_PHASE || inst.op == OP_ENV || inst.op == OP_LFO || inst.op == OP_PC || inst.op == OP_EUCLID || inst.op == OP_ON || inst.op == OP_DUR || inst.op == OP_TO || inst.op == OP_AT_MASK) {
             int args = 1;
             bool has_explicit_arity = false;
             
@@ -585,18 +585,22 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
                 args = stack[sp].toInt();
                 sp--;
             } else {
-                if (inst.op == OP_ENV) args = 3;
+                if (inst.op == OP_ENV || inst.op == OP_AT_MASK) args = 3;
                 else if (inst.op == OP_LFO || inst.op == OP_EUCLID || inst.op == OP_ON) args = 2;
-                else if (inst.op == OP_PC) args = 6;
+                else if (inst.op == OP_PC || inst.op == OP_TO) args = 6;
+                else if (inst.op == OP_DUR) args = 4;
             }
             
             String fn_name = "func";
-            if (inst.op == OP_PHASE) fn_name = "phase";
+            if (inst.op == OP_PHASE) fn_name = "in";
             else if (inst.op == OP_ENV) fn_name = "env";
-            else if (inst.op == OP_LFO) fn_name = "lfo";
+            else if (inst.op == OP_LFO) fn_name = "osc";
             else if (inst.op == OP_PC) fn_name = "pc";
             else if (inst.op == OP_EUCLID) fn_name = "euclid";
             else if (inst.op == OP_ON) fn_name = "on";
+            else if (inst.op == OP_DUR) fn_name = "as";
+            else if (inst.op == OP_TO) fn_name = "to";
+            else if (inst.op == OP_AT_MASK) fn_name = "at";
             
             String func_call = fn_name + "(";
             if (sp >= args - 1) {

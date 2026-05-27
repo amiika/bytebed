@@ -51,6 +51,7 @@ enum OpCode : uint8_t {
     OP_ENV, OP_LFO,
     OP_COLON,
     OP_PC, OP_EUCLID, OP_ON,
+    OP_DUR, OP_TO, OP_AT_MASK,
     OP_DEFAULT_CHECK, OP_DEFAULT_INJECT,
     OP_ARITY 
 };

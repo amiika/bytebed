@@ -57,7 +57,7 @@ void handle_deferred_allocations() {
     if (__builtin_expect(alloc_request_pending, 0)) {
         int32_t target_size = alloc_requested_size;
         if (target_size > global_array_capacity) {
-            ensure_global_array(target_size);
+            ensureGlobalArray(target_size);
         }
         alloc_request_pending = false; 
     }
@@ -186,7 +186,7 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
             float vm_t_step = use_downsample ? 2.0f : 1.0f;
             
             // Safely execute VM with clean strided fractional stepping
-            execute_vm_block((float)t_raw, vm_t_step, virtual_block_size, block_buf);
+            executeVmBlock((float)t_raw, vm_t_step, virtual_block_size, block_buf);
             
             int virtual_read_ptr = 0;
 
@@ -386,7 +386,7 @@ void uiTask(void *pvParameters) {
 
             var_count = 0;
             memset(vars, 0, sizeof(vars));
-            clear_global_array();
+            clearGlobalArray();
             updateRuntimeVars();
 
             bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
@@ -631,7 +631,7 @@ void uiTask(void *pvParameters) {
                     }
                     if (c == 'f' || c == 'F') {
                         current_play_mode = (current_play_mode == MODE_BYTEBEAT) ? MODE_FLOATBEAT : MODE_BYTEBEAT;
-                        var_count = 0; memset(vars, 0, sizeof(vars)); clear_global_array(); 
+                        var_count = 0; memset(vars, 0, sizeof(vars)); clearGlobalArray(); 
                         updateRuntimeVars();
                         bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
                         status_msg = (current_play_mode == MODE_BYTEBEAT) ? "MODE: BYTEBEAT" : "MODE: FLOATBEAT"; status_timer = millis() + 1500;

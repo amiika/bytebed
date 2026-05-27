@@ -323,7 +323,7 @@ bool compileInfix(String input, bool reset_t) {
                         }
                         ot--; 
                     } 
-                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_PHASE || os[ot] == OP_RAND || os[ot] == OP_LOOP_PREP || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON) {
+                    else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_PHASE || os[ot] == OP_RAND || os[ot] == OP_LOOP_PREP || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON || os[ot] == OP_DUR || os[ot] == OP_TO || os[ot] == OP_AT_MASK) {
                         if (os[ot] == OP_LOOP_PREP) {
                             program_bank[target][len++] = {os[ot], (int32_t)os_id[ot]}; 
                             int start_pc = len;
@@ -334,7 +334,7 @@ bool compileInfix(String input, bool reset_t) {
                             program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
                             program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
                             ot--;
-                        } else if (os[ot] == OP_PHASE || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON) {
+                        } else if (os[ot] == OP_PHASE || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON || os[ot] == OP_DUR || os[ot] == OP_TO || os[ot] == OP_AT_MASK) {
                             program_bank[target][len++] = {OP_VAL, setF((float)args)};
                             program_bank[target][len++] = {OP_ARITY, 0};
                             program_bank[target][len++] = {os[ot--], 0}; 
@@ -442,7 +442,7 @@ bool compileInfix(String input, bool reset_t) {
             expect_op = false; 
             flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); 
             
-            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_PHASE || os[ot-1] == OP_LOOP_PREP || os[ot-1] == OP_ENV || os[ot-1] == OP_LFO || os[ot-1] == OP_PC || os[ot-1] == OP_EUCLID || os[ot-1] == OP_ON));
+            bool is_func_call = (ot > 0 && (os[ot-1] == OP_DYN_CALL || os[ot-1] == OP_DYN_CALL_IF_FUNC || (os[ot-1] >= OP_SIN && os[ot-1] <= OP_POW) || os[ot-1] == OP_RAND || os[ot-1] == OP_INT || os[ot-1] == OP_PHASE || os[ot-1] == OP_LOOP_PREP || os[ot-1] == OP_ENV || os[ot-1] == OP_LFO || os[ot-1] == OP_PC || os[ot-1] == OP_EUCLID || os[ot-1] == OP_ON || os[ot-1] == OP_DUR || os[ot-1] == OP_TO || os[ot-1] == OP_AT_MASK));
             bool is_array = (bt_ptr >= 0 && bracket_types[bt_ptr] == 1);
             if (is_func_call) call_arg_counts[cac_ptr]++; 
             else if (is_array) array_counts[ac_ptr]++; 
@@ -774,10 +774,12 @@ bool compileRPN(String input) {
  * Initializes the compiler state by clearing arrays and setting up math constants.
  */
 void initCompilerState() {
-    clear_global_array(); 
+clearGlobalArray(); 
     string_table_count = 0; 
     var_count = 0; 
     memset(vars, 0, sizeof(vars)); 
+
+    if (current_sample_rate <= 0) current_sample_rate = 8000;
     
     vars[getVarId("t")] = {0, 0}; 
     vars[getVarId("bpm")] = {0, setF(120.0f)}; 
@@ -972,7 +974,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
             else if (op == OP_VEC) consumes = (int32_t)getF(program_bank[target][pc-1].val) + 1; 
-            else if (op == OP_PHASE || op == OP_ENV || op == OP_LFO || op == OP_PC || op == OP_EUCLID || op == OP_ON) {
+            else if (op == OP_PHASE || op == OP_ENV || op == OP_LFO || op == OP_PC || op == OP_EUCLID || op == OP_ON || op == OP_DUR || op == OP_TO || op == OP_AT_MASK) {
                 if (pc >= 2 && program_bank[target][pc-1].op == OP_ARITY && program_bank[target][pc-2].op == OP_VAL) {
                     consumes = (int)getF(program_bank[target][pc-2].val);
                 } else consumes = 1; 
