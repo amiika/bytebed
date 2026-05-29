@@ -323,7 +323,6 @@ class Scope {
 }
 
 const scope = new Scope();
-
 const workletCode = `
 class BytebeatWorklet extends AudioWorkletProcessor {
     constructor() {
@@ -334,6 +333,10 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         this.targetSampleRate = 8000;
         this.is_playing = false;
         this.is_floatbeat = false;
+
+        this.current_val = 0;
+        this.next_val = 0;
+        this.has_init = false;
 
         this.port.onmessage = async (e) => {
             const msg = e.data;
@@ -355,16 +358,20 @@ class BytebeatWorklet extends AudioWorkletProcessor {
                 this.wasm.wasm_compile(msg.is_rpn);
             } else if (msg.type === 'play') {
                 this.is_playing = msg.playing;
+                if (!this.is_playing) this.has_init = false;
             } else if (msg.type === 'rate') {
                 this.targetSampleRate = msg.rate;
+                this.has_init = false; // Flush interpolation cache
                 if (this.wasm && this.wasm.wasm_set_sample_rate) this.wasm.wasm_set_sample_rate(msg.rate);
             } else if (msg.type === 'mode') {
                 this.is_floatbeat = (msg.mode === 1);
+                this.has_init = false; // Flush interpolation cache
                 if (this.wasm && this.wasm.wasm_set_play_mode) this.wasm.wasm_set_play_mode(msg.mode);
                 if (this.wasm && this.wasm.wasm_reset_vm) this.wasm.wasm_reset_vm();
             } else if (msg.type === 'reset') {
                 this.t_audio = 0;
                 this.t_frac = 0;
+                this.has_init = false;
                 if (this.wasm && this.wasm.wasm_reset_vm) this.wasm.wasm_reset_vm();
                 this.port.postMessage({ type: 'sync', t_audio: this.t_audio });
             } else if (msg.type === 'mouse') {
@@ -377,30 +384,48 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         };
     }
 
-       process(inputs, outputs, parameters) {
+    // Nasty fix to extract clean float format from WASM binary return
+    get_wasm_float(t) {
+        let sample = this.wasm.wasm_execute(t);
+        if (this.is_floatbeat) {
+            return ((sample >>> 0) / 2147483647.5) - 1.0;
+        } else {
+            return ((sample & 255) - 128) / 128.0; 
+        }
+    }
+
+    process(inputs, outputs, parameters) {
         const out = outputs[0][0];
         if (!this.wasm || !this.is_playing) {
             out.fill(0);
+            this.has_init = false; 
             return true;
         }
 
         const timeStep = this.targetSampleRate / sampleRate;
+
+        // Initialize the first two boundary samples for the interpolator
+        if (!this.has_init) {
+            this.current_val = this.get_wasm_float(this.t_audio);
+            this.next_val = this.get_wasm_float(this.t_audio + 1);
+            this.has_init = true;
+        }
+
         for (let i = 0; i < out.length; i++) {
-            // Fetch the native 32-bit uint32_t sample from the VM
-            let sample = this.wasm.wasm_execute(this.t_audio);
+            // 1. Smoothly draw a line between the two true WASM samples
+            out[i] = this.current_val + this.t_frac * (this.next_val - this.current_val);
             
-            if (this.is_floatbeat) {
-                let unsignedSample = sample >>> 0;
-                out[i] = (unsignedSample / 2147483647.5) - 1.0;
-            } else {
-                out[i] = ((sample & 255) - 128) / 128.0; 
-            }
-            
+            // 2. Advance the sub-sample fractional timeline
             this.t_frac += timeStep;
-            if (this.t_frac >= 1.0) {
-                let steps = Math.floor(this.t_frac);
-                this.t_audio += steps;
-                this.t_frac -= steps;
+            
+            // 3. When we cross a full WASM sample boundary, step the engine forward
+            while (this.t_frac >= 1.0) {
+                this.t_frac -= 1.0;
+                this.t_audio += 1;
+                
+                // Shift the buffer and ONLY execute the WASM engine once per target sample
+                this.current_val = this.next_val;
+                this.next_val = this.get_wasm_float(this.t_audio + 1);
             }
         }
         

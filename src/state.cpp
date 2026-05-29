@@ -148,21 +148,21 @@ const PresetConfig defaultBanks[10][10] = {
         {"v+=(mg-v),T=t*sr,p=(p+mf*TAU/sr)%TAU,E=t%9,s(s(s(s(p*28)/8*E+p*6)/3*E+p*0.5)+p)*v/1.5", 48000, MODE_FLOATBEAT},
         {"v+=(mg-v)*.005,w+=(mg-w)*.00005,P=t*mf*TAU/sr,E=8+32*(v-w),sin(sin(sin(P*16)/100*E+P)/8*E+P)*E/64*v", 48000, MODE_FLOATBEAT}                                                  
     }, 
-    // BANK 9: Unorthodox byteeats with bpm, pc, phase, & other custom parameters
+    
+    // BANK 9: Unorthodox bytebeats with bpm, pc, phase, & other custom parameters
     {
-        {"d=(t>>12)%8,f=pc(d,2,36),(t*f)>>8", 8000, MODE_BYTEBEAT},
-        {"d=(t>>11)%5,o=(t>>12)%2,f=pc(d,o,48,683),(t*f)>>7",8000,MODE_BYTEBEAT},
-        {"d=(t>>10|t>>12)%12,f=pc(d,0,60,10526880,24),(t*f)>>8",8000,MODE_BYTEBEAT},
-        {"pc(t>>11&9,t>>15&3,48,2741,12,432)*t>>8", 8000, MODE_BYTEBEAT},
+        {"d=(t>>11)%7,f=pc(d,1515),f*2*t>>8", 8000, MODE_BYTEBEAT},
+        {"a=[0,1,4,2,3,3]+[2,3,8,1],sin(to(a[step],661))*0.5+osc(80+env(beat,0)*2)*0.5",8000,MODE_BYTEBEAT},
+        {"d=(t>>10|t>>12)%12,f=pc(d,10526880,0,24,440,1),t*f>>7",8000,MODE_BYTEBEAT},
+        {"pc(t>>11&9,2741,t>>15&3)*t>>8", 8000, MODE_BYTEBEAT},
         {"bpm=100,t*env(bar,1,1)", 8000, MODE_BYTEBEAT},
         {"((t * 400 >> 12) % 40) * env(beat % 4, 0.15, 2)", 48000, MODE_FLOATBEAT},
-        {"f=pc([0,4,7,11][step],2,38,16777215,24,340.0), sweep=lfo(phase(0.25,0.5,0.5),0), ap=(ap+(f*(1.0+sweep*0.15))/sr), lfo(ap,0)*env(step%1.0,10,1.0)*0.3", 48000, MODE_FLOATBEAT},
-        {"f=pc([2,7,12,19][step],1,36), ap=(ap+(f*2.0)/sr)%1.0, lfo(ap, 3) * (on(342, step % 8) | on(452, step % 16)) * 0.3", 48000, MODE_FLOATBEAT},
-        {"f=pc([1,2,3][t>>10],2,16,76), ap=(ap+(f*4)/sr), lfo(ap,2)*env(step, 100, 0.5) * on(euclid(7, 16, 0), step % 16)", 48000, MODE_FLOATBEAT},
-        {"bpm=140,steps=16,t*on(euclid(9, 14),t>>7)", 48000, MODE_BYTEBEAT}
+        {"a=[0,4,7,11], sin(to(a[at(313)])) * env(in(.95), 1.5) * 0.5", 48000, MODE_FLOATBEAT},
+        {"to([1,0][t>>5],2234)*on(3245,16)", 48000, MODE_FLOATBEAT},
+        {"to([1,2,3][step])>>1*on(ec(4,7))", 48000, MODE_FLOATBEAT},
+        {"bpm=120,steps=14,t*on(euclid(9, 14))", 48000, MODE_BYTEBEAT}
     }
-                                       
-        
+                        
 };
 
 SlotState slots[10][10];

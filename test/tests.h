@@ -269,16 +269,25 @@ String runBytebeatTestSuite() {
         {"pc(0, 0, 0, 12, 440.0, 0) / 100", 0, 2, false, false},
         {"pc(1, 3, 0, 12, 220.0, 0) / 100", 0, 1, false, false},
         
-        {"euclid(2, 4, 0)",            0, 0x50000000, false, false}, 
-        {"euclid(2, 4, 1)",            0, 0xA0000000, false, false}, 
-        {"euclid(2, 4, 2)",            0, 0x50000000, false, false}, 
-        {"euclid(2, 4, 4)",            0, 0x50000000, false, false}, 
-        {"euclid(3, 5, 0)",            0, 0xA8000000, false, false},
+        {"euclid(2, 4, 0)",            0, 10, false, false}, 
+        {"euclid(2, 4, 1)",            0, 5,  false, false}, 
+        {"euclid(2, 4, 2)",            0, 10, false, false}, 
+        {"euclid(2, 4, 4)",            0, 10, false, false}, 
+        {"euclid(3, 5, 0)",            0, 21, false, false},
 
-        // FIXED EXPECTATIONS: Explicit manual step triggers on correct integer bounds
-        {"beat = 0.25; a = euclid(2, 4, 0); on(a)", 0, 1, false, false}, 
-        {"beat = 0.125; 10 * on(euclid(4, 8))",     0, 0, false, false},  
-        {"beat = 0.375; 10 * on(euclid(4, 8))",     0, 10, false, false},  
+        {"euclid(1, 4)",               0, 8,   false, false}, // 0b1000
+        {"euclid(2, 8)",            0, 136, false, false}, // 0b10001000
+        {"euclid(3, 6)",            0, 42,  false, false}, // 0b101010
+        {"euclid(9, 16)",           0, 43733, false, false}, // 0b1011011010110110
+        {"euclid(4, 8)",            0, 170, false, false}, // 0b10101010
+        {"euclid(3, 8)",            0, 146, false, false}, // 0b10010010
+
+        {"beat = 0.0; a = euclid(2, 4, 0); on(a, 4)",  0, 1, false, false}, // Slot 0 is ON (10 & 8 > 0)
+        {"beat = 0.25; a = euclid(2, 4, 0); on(a, 4)", 0, 0, false, false}, // Slot 1 is OFF (10 & 4 = 0)
+        
+        {"beat = 0.0;  10 * on(euclid(4, 8), 8)",      0, 10, false, false},  // Slot 0 is ON
+        {"beat = 0.25; 10 * on(euclid(4, 8), 8)",      0,  0, false, false},  // Slot 1 is OFF
+        {"beat = 0.5;  10 * on(euclid(4, 8), 8)",      0, 10, false, false},  // Slot 2 is ON
      
         {"beat = 0.5; in(4.0, 4.0) * 10", 0, 5, false, false},
         {"beat = 3.0; in(6.0, 6.0) * 10", 0, 20, false, false},
@@ -293,7 +302,7 @@ String runBytebeatTestSuite() {
         {"beat = 4.0; in(6.0, 2.0)",  0,   4, false, true},  
         {"4.0 beat = 6.0 2.0 2 : in", 0,   4, true,  true},  
         {"4.0 beat = 4.0 4.0 2 : in 10 *", 0, 40, true,  true},  
-        {"2 4 0 3 : euclid",             0, 0x50000000, true, true}, 
+        {"2 4 0 3 : euclid",             0, 10, true, true}, // Updated to reflect standard 0b1010 right-alignment
         {"0.5 1.0 1.0 3 : env 100 *",    0,  0, true,  true},
         {"( x y ) { x y + } myfunc = 10 20 2 : myfunc", 0, 30, true, true},
         {"( x ) { x 5 * } h = 10 1 : h", 0, 50, true, true},

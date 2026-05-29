@@ -87,6 +87,7 @@ static int cached_i_beat   = -1;
 static int cached_i_bar    = -1;
 static int cached_i_steps  = -1;
 static int cached_i_beats  = -1;
+static int cached_i_bars   = -1;
 static int cached_i_sign   = -1;
 static bool sys_indices_initialized = false;
 static int cache_epoch_var_count = -1;
@@ -188,6 +189,7 @@ static inline void init_system_indices() {
         cached_i_bar    = getVarId("bar");
         cached_i_steps  = getVarId("steps");
         cached_i_beats  = getVarId("beats");
+        cached_i_bars   = getVarId("bars");
         cached_i_sign   = getVarId("sign");
         sys_indices_initialized = true;
     }
@@ -359,10 +361,7 @@ struct MaskData {
     int auto_len;
 };
 
-/**
- * DRY HELPER: Safely parses variadic rhythm mask signatures, extracting parameters
- * and unwrapping Euclidean bitmasks from the stack pointer.
- */
+
 inline MaskData parse_rhythm_mask(int args, Val& tos, Val* st, int& sp, int sys_steps) {
     MaskData out = {0, sys_steps, {1.0f, 1.0f}, 0};
     Val base_mask = tos;
@@ -394,7 +393,7 @@ inline MaskData parse_rhythm_mask(int args, Val& tos, Val* st, int& sp, int sys_
         else { union { float f; uint32_t u; } cast_u; cast_u.f = base_mask.f; out.mask = cast_u.u; }
     }
     
-    if (out.auto_len > 0) out.n_steps = out.auto_len;
+    if (args < 2 && out.auto_len > 0) out.n_steps = out.auto_len;
     if (out.n_steps < 1) out.n_steps = 1;
     if (out.n_steps > 32) out.n_steps = 32;
     
@@ -446,6 +445,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
     int i_bar    = cached_i_bar;
     int i_steps  = cached_i_steps; 
     int i_beats  = cached_i_beats;
+    int i_bars   = cached_i_bars;
     int i_sign   = cached_i_sign;
 
     if (vars[i_steps].f == 0.0f) {
@@ -475,14 +475,37 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
         }
 
         float current_beat = anchor_beat + (t - anchor_t) * (vars[i_bpm].f / (60.0f * current_sample_rate));
-        float current_bar = current_beat / 4.0f;
+        
+        float global_beats = 4.0f;
+        if (vars[i_sign].f > 0.0f) global_beats = vars[i_sign].f * 4.0f;
+        else if (vars[i_beats].f > 0.0f) global_beats = vars[i_beats].f;
+        
         float steps_per_bar = vars[i_steps].f;
         if (steps_per_bar <= 0.01f) steps_per_bar = 16.0f; 
 
-        vars[i_beat].type = 0; vars[i_beat].f = current_beat;
-        vars[i_bar].type  = 0; vars[i_bar].f  = current_bar;
-        vars[i_step].type = 0; vars[i_step].f = current_bar * steps_per_bar;
-        vars[t_var_id].type = 0; vars[t_var_id].f = t;
+        float current_bar = current_beat / global_beats;
+
+        float local_beat = current_beat;
+        float local_bar  = current_bar;
+        
+        float global_bars = vars[i_bars].f;
+        if (global_bars > 0.0f) {
+            float total_loop_beats = global_bars * global_beats;
+            local_beat = fmodf(current_beat, total_loop_beats);
+            if (local_beat < 0.0f) local_beat += total_loop_beats;
+            local_bar = local_beat / global_beats;
+        }
+
+        float steps_per_beat = steps_per_bar / global_beats;
+        if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
+
+        vars[i_beat].type = 0; vars[i_beat].f = local_beat;
+        vars[i_bar].type  = 0; vars[i_bar].f  = local_bar;
+        
+        vars[i_step].type = 0; vars[i_step].f = local_beat * steps_per_beat;
+        
+        vars[t_var_id].type = 0; 
+        vars[t_var_id].f = t;
 
         local_array_ptr = 0; int sp = -1; int csp = -1; int ssp = -1; loop_sp = -1; 
         int dynamic_arity = -1; 
@@ -979,7 +1002,6 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
         L_OP_LFO: {
             static float phase_mem[8] = {0.0f};
-            static float last_t[8] = {0.0f};
             static bool initialized[8] = {false};
             
             static float track_t = -1.0f;
@@ -1019,25 +1041,29 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             }
 
             voice_id = (voice_id % 8 + 8) % 8;
+            
+            float dt = 0.0f;
 
             if (input > 1.0f || input < -1.0f) {
                 if (!initialized[voice_id]) {
-                    last_t[voice_id] = t;
                     initialized[voice_id] = true;
                 }
                 
-                float delta_t = t - last_t[voice_id];
-                last_t[voice_id] = t;
-                if (delta_t < 0.0f || delta_t > 100.0f) delta_t = 1.0f;
-
-                phase_mem[voice_id] += input * (delta_t / (float)current_sample_rate);
+                dt = fabsf(input) / (float)current_sample_rate;
+                if (dt > 0.5f) dt = 0.5f; 
+                
+                if (input < 0.0f) {
+                    phase_mem[voice_id] -= dt;
+                } else {
+                    phase_mem[voice_id] += dt;
+                }
+                
                 phase_mem[voice_id] -= floorf(phase_mem[voice_id]);
                 if (phase_mem[voice_id] < 0.0f) phase_mem[voice_id] += 1.0f;
             } else {
                 float wrapped = input - floorf(input);
                 if (wrapped < 0.0f) wrapped += 1.0f;
                 phase_mem[voice_id] = wrapped;
-                last_t[voice_id] = t;
                 initialized[voice_id] = true;
             }
 
@@ -1045,10 +1071,49 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             float out = 0.0f; 
             int t_int = (int)type;
 
-            if (t_int == 0)      out = fast_sin(p * 6.2831853f);
-            else if (t_int == 1) out = 1.0f - (p * 2.0f);
-            else if (t_int == 2) out = (p < 0.5f) ? 1.0f : -1.0f;
-            else if (t_int == 3) out = fast_sin(p * 6.2831853f + 1.570796f);
+            if (t_int == 0) {
+                out = fast_sin(p * 6.2831853f);
+            } 
+            else if (t_int == 1) {
+                out = 1.0f - (p * 2.0f); 
+                
+                if (dt > 0.0f) {
+                    if (p < dt) {
+                        float t_pb = p / dt;
+                        out -= (1.0f - t_pb) * (1.0f - t_pb);
+                    } else if (p > 1.0f - dt) {
+                        float t_pb = (1.0f - p) / dt;
+                        out += (1.0f - t_pb) * (1.0f - t_pb);
+                    }
+                }
+            } 
+            else if (t_int == 2) {
+                out = (p < 0.5f) ? 1.0f : -1.0f;
+                
+                if (dt > 0.0f) {
+                    if (p < dt) {
+                        float t_pb = p / dt;
+                        out -= (1.0f - t_pb) * (1.0f - t_pb);
+                    } else if (p > 1.0f - dt) {
+                        float t_pb = (1.0f - p) / dt;
+                        out += (1.0f - t_pb) * (1.0f - t_pb);
+                    }
+                    
+                    float p2 = p + 0.5f;
+                    if (p2 >= 1.0f) p2 -= 1.0f;
+                    
+                    if (p2 < dt) {
+                        float t_pb = p2 / dt;
+                        out += (1.0f - t_pb) * (1.0f - t_pb);
+                    } else if (p2 > 1.0f - dt) {
+                        float t_pb = (1.0f - p2) / dt;
+                        out -= (1.0f - t_pb) * (1.0f - t_pb);
+                    }
+                }
+            } 
+            else if (t_int == 3) {
+                out = fast_sin(p * 6.2831853f + 1.570796f);
+            }
 
             tos.type = 0; 
             if (is_bb) {
@@ -1064,7 +1129,8 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             int args = (dynamic_arity != -1) ? dynamic_arity : 6;
             dynamic_arity = -1;
             
-            float p[6] = {0.0f, 2741.0f, 60.0f, 12.0f, 440.0f, 0.0f}; 
+            float p[6] = {0.0f, 2741.0f, 0.0f, 12.0f, 440.0f, 0.0f}; 
+            
             int to_pop = (args > 6) ? 6 : args;
             for (int i = to_pop - 1; i >= 0; i--) {
                 if (i == to_pop - 1) p[i] = sanitize(tos.f);
@@ -1080,30 +1146,31 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
         L_OP_EUCLID: {
             int args = (dynamic_arity != -1) ? dynamic_arity : 2;
             dynamic_arity = -1;
-            if (args < 2) args = 2;
             
             float dynamic_steps = vars[i_steps].f > 0.01f ? vars[i_steps].f : 16.0f;
-            float p[3] = {0.0f, dynamic_steps, 0.0f};
+            float p[3] = {0.0f, dynamic_steps, 0.0f}; 
             
-            if (args >= 1) {
-                p[args - 1] = (tos.type == 1) ? (float)tos.v : sanitize(tos.f);
-            }
-            for (int i = args - 2; i >= 0; i--) {
-                if (sp >= 0) {
+            int to_pop = (args > 3) ? 3 : args;
+            for (int i = to_pop - 1; i >= 0; i--) {
+                if (i == to_pop - 1) {
+                    p[i] = (tos.type == 1) ? (float)tos.v : sanitize(tos.f);
+                } else if (sp >= 0) {
                     Val v = vm_stack[sp--];
                     p[i] = (v.type == 1) ? (float)v.v : sanitize(v.f);
                 }
             }
-            
-            int extra_args = args - 3; 
-            
-            if (extra_args > 0) {
-                sp -= extra_args;
+            if (args > 3) {
+                sp -= (args - 3);
                 if (sp < -1) sp = -1;
             }
             
-            int k = (int)p[0];
-            int n = (int)p[1];
+            float raw_k = p[0];
+            float raw_n = p[1];
+            bool invert_pattern   = (raw_k < 0.0f);
+            bool reverse_pattern  = (raw_n < 0.0f);
+
+            int k = (int)fabsf(raw_k);
+            int n = (int)fabsf(raw_n);
             int r = (int)p[2];
 
             if (n < 1 || n > 32) n = 8;
@@ -1112,18 +1179,23 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
             uint32_t mask = 0;
             if (k >= n) {
-                if (n == 32) mask = 0xFFFFFFFF;
-                else mask = ((1U << n) - 1) << (32 - n);
+                mask = (n == 32) ? 0xFFFFFFFF : ((1U << n) - 1);
             } else if (k > 0) {
-                int error = n / 2; 
                 for (int i = 0; i < n; i++) {
-                    error -= k;
-                    if (error < 0) {
-                        int pos = (i + r) % n;
-                        mask |= (1U << (31 - pos)); 
-                        error += n;
+                    if ((i * k) % n < k) {
+                        int logical_idx = reverse_pattern ? (n - 1 - i) : i;
+                        
+                        int pos = (logical_idx + r) % n;
+                        if (pos < 0) pos += n;
+                        
+                        mask |= (1U << (n - 1 - pos)); 
                     }
                 }
+            }
+            
+            if (invert_pattern) {
+                uint32_t window_mask = (n == 32) ? 0xFFFFFFFF : ((1U << n) - 1);
+                mask = (~mask) & window_mask;
             }
             
             tos.type = 1; 
@@ -1163,18 +1235,20 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
                 if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
 
                 float continuous_step = absolute_beat * steps_per_beat;
-                target_slot = ((int)continuous_step) % md.n_steps;
+                target_slot = ((int)floorf(continuous_step)) % md.n_steps;
             }
             
             if (target_slot < 0) target_slot += md.n_steps;
             
-            int bit_idx = (md.auto_len > 0) ? (31 - target_slot) : (md.n_steps - 1 - target_slot);
+            int bit_idx = md.n_steps - 1 - target_slot;
             
-            tos.type = 0; tos.f = (md.mask & (1U << bit_idx)) ? 1.0f : 0.0f; tos.len = 0;
+            tos.type = 0; 
+            tos.f = (md.mask & (1U << bit_idx)) ? 1.0f : 0.0f; 
+            tos.len = 0;
             BOING();
         }
 
-        L_OP_DUR: {
+   L_OP_DUR: {
             int args = (dynamic_arity != -1) ? dynamic_arity : 4;
             dynamic_arity = -1;
             
@@ -1182,7 +1256,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
             int hit_positions[32]; int hit_count = 0;
             for (int i = 0; i < md.n_steps; i++) {
-                int bit_pos = (md.auto_len > 0) ? (31 - i) : (md.n_steps - 1 - i);
+                int bit_pos = md.n_steps - 1 - i;
                 if (md.mask & (1U << bit_pos)) hit_positions[hit_count++] = i;
             }
 
@@ -1217,11 +1291,9 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             float freq = calculatePitch(p[0], p[1], p[2], p[3], p[4], p[5]);
             tos.type = 0;
 
-            // Determine if the timeline is running with a 2x stride adjustment
             float stride_scaler = (current_sample_rate >= 44100) ? 0.5f : 1.0f;
 
             if (is_bb) {
-                // Perfect, stateless phase calculations scaled cleanly against the timeline
                 float phase_step = (freq * 256.0f) / (float)current_sample_rate;
                 tos.f = (float)((int32_t)(t * phase_step * stride_scaler) & 255);
             } else {
@@ -1242,8 +1314,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
             int hits_per_pattern = 0;
             for (int i = 0; i < md.n_steps; i++) {
-                int bit_pos = (md.auto_len > 0) ? (31 - i) : (md.n_steps - 1 - i);
-                if (md.mask & (1U << bit_pos)) hits_per_pattern++;
+                if (md.mask & (1U << (md.n_steps - 1 - i))) hits_per_pattern++;
             }
 
             if (hits_per_pattern == 0) {
@@ -1252,26 +1323,30 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             }
 
             float absolute_beat = (args == 3) ? md.extra[0] : vars[i_beat].f;
-            float global_steps = vars[i_steps].f > 0.0f ? vars[i_steps].f : 16.0f;
+            float master_steps = vars[i_steps].f > 0.0f ? vars[i_steps].f : 16.0f;
             
             float global_beats = 4.0f;
             if (vars[i_sign].f > 0.0f) global_beats = vars[i_sign].f * 4.0f;
             else if (vars[i_beats].f > 0.0f) global_beats = vars[i_beats].f;
 
-            float steps_per_beat = global_steps / global_beats;
+            float steps_per_beat = master_steps / global_beats;
             if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
 
             float continuous_step = absolute_beat * steps_per_beat;
 
-            int completed_patterns = (int)(continuous_step / md.n_steps);
+            int completed_patterns = (int)floorf(continuous_step / md.n_steps);
             float current_pattern_slot = fmodf(continuous_step, (float)md.n_steps);
-            if (current_pattern_slot < 0.0f) { current_pattern_slot += md.n_steps; completed_patterns--; }
+            if (current_pattern_slot < 0.0f) { 
+                current_pattern_slot += md.n_steps; 
+                completed_patterns--;
+            }
 
             int local_hits = 0;
-            int target_slot_int = (int)current_pattern_slot;
+            int target_slot_int = (int)floorf(current_pattern_slot);
             for (int i = 0; i <= target_slot_int; i++) {
-                int bit_pos = (md.auto_len > 0) ? (31 - i) : (md.n_steps - 1 - i);
-                if (md.mask & (1U << bit_pos)) local_hits++;
+                if (i < md.n_steps) {
+                    if (md.mask & (1U << (md.n_steps - 1 - i))) local_hits++;
+                }
             }
 
             long total_absolute_hits = ((long)completed_patterns * hits_per_pattern) + local_hits;
@@ -1289,7 +1364,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
         L_DEFAULT: BOING();
 
         L_END:
-        /* Pass through 32-bit exact integers for raw un-gated logic blocks if left at the very end of a line */
+
         if (tos.type == 1) { 
             out_buf[sample_idx] = (uint32_t)tos.v; 
             continue; 
@@ -1319,20 +1394,16 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
         }
 
         if (!is_bb) {
-            /* --- FLOATBEAT RESOLUTION PIPELINE --- */
             out = sanitize(out);
-            
-            // 1. HARDWARE-ACCELERATED AUTO-WRAP CHECK: Eliminates 64-bit modff software emulation
+
             if (out > 8.0f || out < -8.0f) {
                 float fraction = out - (float)((int32_t)out);
                 out = (fraction * 2.0f) - 1.0f; 
             } 
-            
-            // 2. HEADROOM GUARD: Safe bounding clamp for standard high-fi synthesis waves
+
             if (out > 1.0f) out = 1.0f;
             if (out < -1.0f) out = -1.0f;
-
-            // 3. HARDWARE BIT-SHIFT SCALE: Seamless, ultra-fast 32-bit unsigned PCM scaling
+            
             int32_t signed_pcm = (int32_t)(out * (float)INT32_MAX);
             out_buf[sample_idx] = (uint32_t)signed_pcm ^ 0x80000000;
         } else if (tos.type != 2 && tos.type != 3) {
