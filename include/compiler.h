@@ -76,7 +76,7 @@ void initCompilerState();
  * @param consume_len Reference to store the consumed string length
  * @return true if a lambda definition is found, false otherwise
  */
-static bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len);
+bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len);
 
 /**
  * Parses a compound assignment operator from the input string.
@@ -85,7 +85,7 @@ static bool isLambdaDef(const char* p, String* params, bool* has_defaults, float
  * @param advanceBy Reference to store how many characters to advance
  * @return true if a compound operator is parsed, false otherwise
  */
-static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy);
+bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy);
 
 /**
  * Tokenizes an input string for RPN compilation.
@@ -94,7 +94,7 @@ static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy);
  * @param max_tokens Maximum number of tokens allowed
  * @return The number of tokens parsed
  */
-static int tokenize(const String& input, String* tokens, int max_tokens);
+int tokenize(const String& input, String* tokens, int max_tokens);
 
 /**
  * Finds the start index of an expression in the program bank.
@@ -102,7 +102,7 @@ static int tokenize(const String& input, String* tokens, int max_tokens);
  * @param end_pc The end program counter index
  * @return The starting program counter index of the expression
  */
-static int get_expr_start(uint8_t target, int end_pc);
+int get_expr_start(uint8_t target, int end_pc);
 
 /**
  * Flushes operators from the operator stack to the program bank.
@@ -117,7 +117,7 @@ static int get_expr_start(uint8_t target, int end_pc);
  * @param minPrec The minimum precedence level to flush
  * @param stopAtMarker Whether to stop at a store marker
  */
-static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt = OP_NONE, int minPrec = -1, bool stopAtMarker = false);
+void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt = OP_NONE, int minPrec = -1, bool stopAtMarker = false);
 
 /**
  * Applies a compound assignment operator dynamically.
@@ -129,6 +129,6 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
  * @param assignOp The compound assignment operator to apply
  * @return true if successfully applied, false otherwise
  */
-static bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp);
+bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp);
 
 #endif

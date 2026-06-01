@@ -9,6 +9,9 @@ extern String last_vm_error;
     #define P_ERR(shortMsg, longMsg) do { last_vm_error = String(shortMsg); return false; } while(0)
 #endif
 
+/**
+ * Supports single-line (//) and multi-line comments, while preserving string literals.
+ */
 static String stripComments(const String& input) {
     String result = "";
     #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
@@ -70,11 +73,96 @@ static String stripComments(const String& input) {
 }
 
 /**
+ * Emits a string literal into the program bank, managing the string table and ensuring efficient storage.
+ */
+static void emitStringLiteral(uint8_t target, int& len, const String& extracted) {
+    int str_id = string_table_count;
+    if (string_table_count < 64) {
+        string_table[string_table_count++] = extracted;
+    } else { str_id = 63; }
+    program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
+}
+
+/**
+ * Emits a loop iterator setup into the program bank.
+ */
+static void emitLoopIterator(uint8_t target, int& len, int ltype) {
+    program_bank[target][len++] = {OP_LOOP_PREP, (int32_t)ltype};
+    int start_pc = len;
+    program_bank[target][len++] = {OP_LOOP_EVAL, 0};
+    int eval_pc = len - 1;
+    program_bank[target][len++] = {OP_LOOP_DONE, 0};
+    program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
+    program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+}
+
+/**
+ * Emits lambda parameter bindings into the program bank.
+ */
+static void emitLambdaBindings(uint8_t target, int& len, int param_cnt, const int* p_ids, const bool* has_def, const float* def_vals) {
+    for (int i = param_cnt - 1; i >= 0; i--) {
+        if (has_def[i]) {
+            program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(i + 1)};
+            program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(def_vals[i])};
+        }
+    }
+    for (int i = param_cnt - 1; i >= 0; i--) {
+        program_bank[target][len++] = {OP_BIND, (int32_t)p_ids[i]};
+    }
+}
+
+/**
+ * Closes the lambda infix context, flushing any remaining operations and managing variable lifetimes.
+ */
+static void closeLambdaInfix(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, LambdaCtx& lam) {
+    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+    if (ot >= 0 && os[ot] == OP_NONE) ot--; 
+    
+    int assigns_to_keep[64]; int atk_cnt = 0;
+    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
+        if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; 
+        ot--;
+    }
+    
+    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
+    program_bank[target][len++] = {OP_RET, 0}; 
+    program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
+    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
+}
+
+/**
+ * Emits dynamic call arguments into the program bank.
+ */
+static void emitDynamicCallArgs(uint8_t target, int& len, int args, int os_id_val) {
+    if (os_id_val != -1) {
+        program_bank[target][len++] = {OP_LOAD, (int32_t)os_id_val}; 
+        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
+    } else {
+        if (args > 0) {
+            int args_start = len;
+            for (int i = 0; i < args; i++) args_start = get_expr_start(target, args_start - 1);
+            int expr_start = get_expr_start(target, args_start - 1);
+            
+            int expr_len = args_start - expr_start;
+            int args_len = len - args_start;
+            
+            std::unique_ptr<Instruction[]> temp_buf(new Instruction[512]);
+            memcpy(temp_buf.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
+            
+            int ptr = expr_start;
+            memcpy(&program_bank[target][ptr], &temp_buf[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
+            memcpy(&program_bank[target][ptr], &temp_buf[0], expr_len * sizeof(Instruction));
+        }
+        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
+    }
+}
+
+/**
  * Universal high-performance numeric parser for the VM.
  * Supports Binary (0b), Hex (0x), Decimal, and standard floats.
- * Safely advances the pointer past the parsed number.
+ * Packages binary masks directly into smart Val containers carrying length metadata.
  */
-static bool parseNumber(const char*& p, float& outVal) {
+bool parseNumber(const char*& p, Val& outVal) {
     const char* start = p;
     bool is_neg = false;
     
@@ -86,23 +174,30 @@ static bool parseNumber(const char*& p, float& outVal) {
     if (*p == '0' && (*(p+1) == 'b' || *(p+1) == 'B')) {
         p += 2;
         uint32_t val = 0;
+        int bit_count = 0;
         while (*p == '0' || *p == '1') {
             val = (val << 1) | (*p++ - '0');
+            bit_count++;
         }
-        outVal = is_neg ? -(float)val : (float)val;
+        outVal.type = 1;
+        outVal.v = is_neg ? -(int32_t)val : (int32_t)val;
+        outVal.len = bit_count;
         return true;
     }
 
     p = start; 
     if (isdigit(*p) || (*p == '-' && isdigit(*(p+1))) || (*p == '.' && isdigit(*(p+1))) || (*p == '-' && *(p+1) == '.' && isdigit(*(p+2)))) {
         char* next_p;
-        outVal = strtof(p, &next_p);
+        float fval = strtof(p, &next_p);
         
         if (next_p > p) {
             if (*(next_p - 1) == '.' && isalpha(*next_p)) {
                 next_p--;
             }
             p = next_p;
+            outVal.type = 0;
+            outVal.f = fval;
+            outVal.len = 0;
             return true;
         }
     }
@@ -150,18 +245,7 @@ bool compileInfix(String input, bool reset_t) {
             while (ol_ptr >= 0) {
                 auto& lam = open_lambdas[ol_ptr];
                 if (!lam.uses_braces && paren_depth <= lam.depth) {
-                    flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true);
-                    if (ot >= 0 && os[ot] == OP_NONE) ot--; 
-                    
-                    int assigns_to_keep[64]; int atk_cnt = 0;
-                    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
-                        if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
-                    }
-                    
-                    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
-                    program_bank[target][len++] = {OP_RET, 0}; 
-                    program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
-                    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
+                    closeLambdaInfix(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, lam);
                     ol_ptr--; expect_op = true;
                 } else break;
             }
@@ -170,11 +254,17 @@ bool compileInfix(String input, bool reset_t) {
         if (isspace(*p)) { p++; continue; }
         
         if (isdigit(*p) || (*p == '.' && isdigit(*(p+1)))) { 
-            float val;
-            if (parseNumber(p, val)) {
+            Val parsedVal;
+            if (parseNumber(p, parsedVal)) {
                 if (expect_op) P_ERR("ERR: .?", "Compile Error: Expected operator before number");
                 expect_op = true;
-                program_bank[target][len++] = {OP_VAL, setF(val)}; 
+                
+                if (parsedVal.type == 1) {
+                    program_bank[target][len++] = {OP_VAL, setF((float)parsedVal.v)};
+                    program_bank[target][len++] = {OP_MASK_META, parsedVal.len};
+                } else {
+                    program_bank[target][len++] = {OP_VAL, setF(parsedVal.f)}; 
+                }
                 continue;
             }
         }
@@ -193,9 +283,8 @@ bool compileInfix(String input, bool reset_t) {
             if (!is_math && (wordBuffer == "sum" || wordBuffer == "gen" || wordBuffer == "map" || wordBuffer == "reduce" || wordBuffer == "filter")) {
                 if (expect_op) P_ERR("ERR: "+wordBuffer, "Compile Error: Expected operator before iterator '" + wordBuffer + "'");
                 expect_op = false; 
-                os[++ot] = OP_LOOP_PREP; 
                 int ltype = 0; if (wordBuffer == "gen") ltype = 1; else if (wordBuffer == "map") ltype = 2; else if (wordBuffer == "reduce") ltype = 3; else if (wordBuffer == "filter") ltype = 4;
-                os_id[ot] = ltype; 
+                os[++ot] = OP_LOOP_PREP; os_id[ot] = ltype; 
                 is_math = true; 
             }
             if (!is_math && !isVarDefined(wordBuffer)) {
@@ -245,12 +334,7 @@ bool compileInfix(String input, bool reset_t) {
             }
             if (*p == quote_type) p++;
             
-            int str_id = string_table_count;
-            if (string_table_count < 64) {
-                string_table[string_table_count++] = extracted;
-            } else { str_id = 63; }
-            
-            program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
+            emitStringLiteral(target, len, extracted);
             expect_op = true;
         }
         else if (*p == '$' && *(p+1) == '[') {
@@ -269,16 +353,12 @@ bool compileInfix(String input, bool reset_t) {
                 int start_pc = len; program_bank[target][len++] = {OP_PUSH_FUNC, 0};
                 LambdaCtx lam; lam.depth = paren_depth; lam.p_cnt = param_cnt; lam.start_pc = start_pc;
                 
-                for (int i = param_cnt - 1; i >= 0; i--) {
-                    if (has_defaults[i]) {
-                        program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(i + 1)};
-                        program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(default_vals[i])};
-                    }
-                }
+                int p_ids[8];
+                for (int i = 0; i < param_cnt; i++) p_ids[i] = getVarId(params[i]);
+                emitLambdaBindings(target, len, param_cnt, p_ids, has_defaults, default_vals);
                 
-                for (int i = param_cnt - 1; i >= 0; i--) {
-                    int pid = getVarId(params[i]); lam.p_ids[i] = pid; program_bank[target][len++] = {OP_BIND, (int32_t)pid};
-                }
+                for (int i = 0; i < param_cnt; i++) lam.p_ids[i] = p_ids[i];
+                
                 p += consume_len; while (isspace(*p)) p++;
                 bool braces = (*p == '{'); if (braces) p++;
                 lam.uses_braces = braces; if (ol_ptr < 63) open_lambdas[++ol_ptr] = lam;
@@ -298,41 +378,12 @@ bool compileInfix(String input, bool reset_t) {
                 ot--; 
                 if (ot >= 0) {
                     if (os[ot] == OP_DYN_CALL) { 
-                        if (os_id[ot] != -1) {
-                            program_bank[target][len++] = {OP_LOAD, (int32_t)os_id[ot]}; 
-                            program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
-                        } else {
-                            if (args > 0) {
-                                int args_start = len;
-                                for (int i = 0; i < args; i++) {
-                                    args_start = get_expr_start(target, args_start - 1);
-                                }
-                                int expr_start = get_expr_start(target, args_start - 1);
-                                
-                                int expr_len = args_start - expr_start;
-                                int args_len = len - args_start;
-                                
-                                std::unique_ptr<Instruction[]> temp_buf(new Instruction[512]);
-                                memcpy(temp_buf.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
-                                
-                                int ptr = expr_start;
-                                memcpy(&program_bank[target][ptr], &temp_buf[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
-                                memcpy(&program_bank[target][ptr], &temp_buf[0], expr_len * sizeof(Instruction));
-                            }
-                            program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
-                        }
+                        emitDynamicCallArgs(target, len, args, os_id[ot]);
                         ot--; 
                     } 
                     else if ((os[ot] >= OP_SIN && os[ot] <= OP_POW) || os[ot] == OP_INT || os[ot] == OP_PHASE || os[ot] == OP_RAND || os[ot] == OP_LOOP_PREP || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON || os[ot] == OP_DUR || os[ot] == OP_TO || os[ot] == OP_AT_MASK) {
                         if (os[ot] == OP_LOOP_PREP) {
-                            program_bank[target][len++] = {os[ot], (int32_t)os_id[ot]}; 
-                            int start_pc = len;
-                            program_bank[target][len++] = {OP_LOOP_EVAL, 0};
-                            int eval_pc = len - 1;
-                            program_bank[target][len++] = {OP_LOOP_DONE, 0};
-                            
-                            program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
-                            program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+                            emitLoopIterator(target, len, os_id[ot]);
                             ot--;
                         } else if (os[ot] == OP_PHASE || os[ot] == OP_ENV || os[ot] == OP_LFO || os[ot] == OP_PC || os[ot] == OP_EUCLID || os[ot] == OP_ON || os[ot] == OP_DUR || os[ot] == OP_TO || os[ot] == OP_AT_MASK) {
                             program_bank[target][len++] = {OP_VAL, setF((float)args)};
@@ -380,13 +431,8 @@ bool compileInfix(String input, bool reset_t) {
             wordBuffer = "";
             while (isalpha(*p) || isdigit(*p) || *p == '_') wordBuffer += *p++;
             if (wordBuffer == "sum" || wordBuffer == "gen" || wordBuffer == "map" || wordBuffer == "reduce" || wordBuffer == "filter") {
-                os[++ot] = OP_LOOP_PREP;
-                int ltype = 0;
-                if (wordBuffer == "gen") ltype = 1;
-                else if (wordBuffer == "map") ltype = 2;
-                else if (wordBuffer == "reduce") ltype = 3;
-                else if (wordBuffer == "filter") ltype = 4;
-                os_id[ot] = ltype;
+                int ltype = 0; if (wordBuffer == "gen") ltype = 1; else if (wordBuffer == "map") ltype = 2; else if (wordBuffer == "reduce") ltype = 3; else if (wordBuffer == "filter") ltype = 4;
+                os[++ot] = OP_LOOP_PREP; os_id[ot] = ltype;
                 expect_op = false; 
             } else {
                 P_ERR("ERR: ."+wordBuffer, "Compile Error: Unrecognized array method '." + wordBuffer + "'");
@@ -395,17 +441,7 @@ bool compileInfix(String input, bool reset_t) {
         else if (*p == '{') { P_ERR("ERR: {", "Compile Error: Unexpected opening brace '{'"); } 
         else if (*p == '}') {
             if (ol_ptr >= 0 && open_lambdas[ol_ptr].uses_braces) {
-                auto& lam = open_lambdas[ol_ptr];
-                flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true);
-                if (ot >= 0 && os[ot] == OP_NONE) ot--; 
-                int assigns_to_keep[64]; int atk_cnt = 0;
-                while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
-                    if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
-                }
-                for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
-                program_bank[target][len++] = {OP_RET, 0}; 
-                program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
-                for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
+                closeLambdaInfix(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, open_lambdas[ol_ptr]);
                 ol_ptr--; p++; expect_op = true; 
             } else P_ERR("ERR: {", "Compile Error: Unmatched closing brace '}'");
         }
@@ -489,15 +525,7 @@ bool compileInfix(String input, bool reset_t) {
     while (ol_ptr >= 0) {
         auto& lam = open_lambdas[ol_ptr];
         if (!lam.uses_braces) {
-            flushOps(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, OP_NONE, -1, true); if (ot >= 0 && os[ot] == OP_NONE) ot--; 
-            int assigns_to_keep[64]; int atk_cnt = 0;
-            while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
-                if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; ot--;
-            }
-            for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
-            program_bank[target][len++] = {OP_RET, 0}; 
-            program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
-            for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
+            closeLambdaInfix(target, len, os.get(), os_id.get(), ot, cond_starts.get(), cs_ptr, lam);
             ol_ptr--;
         } else P_ERR("ERR: =>{", "Compile Error: Unclosed brace in lambda definition"); 
     }
@@ -558,13 +586,7 @@ bool compileRPN(String input) {
         else if (s == "sum" || s == "gen" || s == "map" || s == "reduce" || s == "filter") {
             int ltype = 0;
             if (s == "gen") ltype = 1; else if (s == "map") ltype = 2; else if (s == "reduce") ltype = 3; else if (s == "filter") ltype = 4;
-            program_bank[target][len++] = {OP_LOOP_PREP, ltype};
-            int start_pc = len;
-            program_bank[target][len++] = {OP_LOOP_EVAL, 0};
-            int eval_pc = len - 1;
-            program_bank[target][len++] = {OP_LOOP_DONE, 0};
-            program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
-            program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+            emitLoopIterator(target, len, ltype);
         }
         else if (s == "(") {
             bool is_params = false;
@@ -593,14 +615,7 @@ bool compileRPN(String input) {
             if (bs_ptr < 31) block_starts[++bs_ptr] = len; 
             program_bank[target][len++] = {OP_PUSH_FUNC, 0};
             
-            for (int k = cp_cnt - 1; k >= 0; k--) {
-                if (current_has_default[k]) {
-                    program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(k + 1)};
-                    program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(current_default_vals[k])};
-                }
-            }
-            
-            for (int k = cp_cnt - 1; k >= 0; k--) program_bank[target][len++] = {OP_BIND, (int32_t)current_params[k]};
+            emitLambdaBindings(target, len, cp_cnt, current_params, current_has_default, current_default_vals);
             
             if (bp_ptr < 31) {
                 bp_ptr++; bp_counts[bp_ptr] = cp_cnt;
@@ -667,18 +682,15 @@ bool compileRPN(String input) {
         }
         else if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith("\"") && s.endsWith("\""))) {
             String extracted = s.substring(1, s.length() - 1);
-            int str_id = string_table_count;
-            if (string_table_count < 64) {
-                string_table[string_table_count++] = extracted;
-            } else { str_id = 63; }
-            program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
+            emitStringLiteral(target, len, extracted);
         }
         else if (parsing_params) {
             const char* p_tok = s.c_str();
-            float val;
+            Val parsedVal;
             
-            if (parseNumber(p_tok, val) && *p_tok == '\0') {
-                current_pending_def_val = negate ? -val : val;
+            if (parseNumber(p_tok, parsedVal) && *p_tok == '\0') {
+                float def_f = (parsedVal.type == 1) ? (float)parsedVal.v : parsedVal.f;
+                current_pending_def_val = negate ? -def_f : def_f;
                 current_has_pending_def = true;
                 negate = false; 
             } else {
@@ -700,11 +712,20 @@ bool compileRPN(String input) {
         }
         else {
             const char* p_tok = s.c_str();
-            float val;
+            Val parsedVal;
             
-            if (parseNumber(p_tok, val) && *p_tok == '\0') {
-                if (negate) { val = -val; negate = false; }
-                program_bank[target][len++] = {OP_VAL, setF(val)};
+            if (parseNumber(p_tok, parsedVal) && *p_tok == '\0') {
+                if (negate) { 
+                    if (parsedVal.type == 1) parsedVal.v = -parsedVal.v; 
+                    else parsedVal.f = -parsedVal.f; 
+                    negate = false; 
+                }
+                if (parsedVal.type == 1) {
+                    program_bank[target][len++] = {OP_VAL, setF((float)parsedVal.v)};
+                    program_bank[target][len++] = {OP_MASK_META, parsedVal.len};
+                } else {
+                    program_bank[target][len++] = {OP_VAL, setF(parsedVal.f)};
+                }
             }
             else if (s == ";") program_bank[target][len++] = {OP_POP, 0}; 
             else if (s == "?") program_bank[target][len++] = {OP_COND, 0};
@@ -806,7 +827,7 @@ clearGlobalArray();
     vars[getVarId("SQRT12")] = {0, setF(M_SQRT1_2)};
 }
 
-static bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len) {
+bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len) {
     const char* start = p;
     if (*p != '(') return false;
     p++;
@@ -862,7 +883,7 @@ static bool isLambdaDef(const char* p, String* params, bool* has_defaults, float
     return false;
 }
 
-static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy) {
+bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy) {
     if (p[0] && p[1] == '=') {
         if (p[0] == '+') { outOp = OP_ADD_ASSIGN; advanceBy = 2; return true; }
         if (p[0] == '-') { outOp = OP_SUB_ASSIGN; advanceBy = 2; return true; }
@@ -879,7 +900,7 @@ static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy) 
     return false;
 }
 
-static int tokenize(const String& input, String* tokens, int max_tokens) {
+int tokenize(const String& input, String* tokens, int max_tokens) {
     int tok_cnt = 0;
     const char* p = input.c_str();
     
@@ -945,7 +966,7 @@ static int tokenize(const String& input, String* tokens, int max_tokens) {
     return tok_cnt;
 }
 
-static int get_expr_start(uint8_t target, int end_pc) {
+int get_expr_start(uint8_t target, int end_pc) {
     int stack_need = 1;
     int pc = end_pc;
     int func_depth = 0; 
@@ -961,7 +982,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
 
         if (func_depth == 0) {
             int produces = 1;
-            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT || op == OP_ARITY) produces = 0;
+            if (op == OP_POP || op == OP_STORE || op == OP_JMP || op == OP_BIND || op == OP_UNBIND || op == OP_RET || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT || op == OP_ARITY || op == OP_MASK_META) produces = 0;
             else if (op == OP_DUP || op == OP_SWAP) produces = 2;
             else if (op == OP_ROT || op == OP_OVER) produces = 3;
             
@@ -969,7 +990,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
             if (op == OP_ADD || op == OP_SUB || op == OP_MUL || op == OP_DIV || op == OP_MOD || op == OP_AND || op == OP_OR || op == OP_XOR || op == OP_SHL || op == OP_SHR || op == OP_LT || op == OP_GT || op == OP_EQ || op == OP_NEQ || op == OP_LTE || op == OP_GTE || op == OP_MIN || op == OP_MAX || op == OP_POW || op == OP_SC_AND || op == OP_SC_OR || op == OP_AT || op == OP_LOOP_PREP || op == OP_SWAP || op == OP_OVER) consumes = 2;
             else if (op == OP_STORE_AT || op == OP_COND || op == OP_COLON || op == OP_ROT) consumes = 3;
             else if (op >= OP_ADD_ASSIGN && op <= OP_POW_ASSIGN) consumes = 1;
-            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP || op == OP_LOAD_STR || op == OP_ARITY) consumes = 1;
+            else if (op == OP_NEG || op == OP_NOT || op == OP_BNOT || (op >= OP_SIN && op <= OP_ATAN) || op == OP_STORE || op == OP_STORE_KEEP || op == OP_POP || op == OP_ASSIGN_VAR || op == OP_BIND || op == OP_ALLOC || op == OP_INT || op == OP_DUP || op == OP_LOAD_STR || op == OP_ARITY || op == OP_MASK_META) consumes = 1;
             else if (op == OP_RAND || op == OP_LOOP_DONE || op == OP_LOOP_EVAL || op == OP_DEFAULT_CHECK || op == OP_DEFAULT_INJECT) consumes = 0; 
             else if (op == OP_DYN_CALL) consumes = program_bank[target][pc].val + 1;
             else if (op == OP_DYN_CALL_IF_FUNC) consumes = 1;
@@ -987,7 +1008,7 @@ static int get_expr_start(uint8_t target, int end_pc) {
     return pc + 1;
 }
 
-static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt, int minPrec, bool stopAtMarker) {
+void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt, int minPrec, bool stopAtMarker) {
     while (ot >= 0 && os[ot] != stopAt) {
         if (stopAtMarker && os[ot] == OP_STORE) break;
         if (os[ot] == OP_DYN_CALL) break; 
@@ -1004,14 +1025,7 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
                 ot--;
             }
             else if (os[ot] == OP_LOOP_PREP) {
-                program_bank[target][len++] = {OP_LOOP_PREP, (int32_t)os_id[ot]};
-                int start_pc = len;
-                program_bank[target][len++] = {OP_LOOP_EVAL, 0};
-                int eval_pc = len - 1;
-                program_bank[target][len++] = {OP_LOOP_DONE, 0};
-                
-                program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
-                program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+                emitLoopIterator(target, len, os_id[ot]);
                 ot--;
             }
             else if (os[ot] == OP_ASSIGN_VAR) { program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)os_id[ot--]}; }
@@ -1031,7 +1045,7 @@ static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, 
     }
 }
 
-static bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp) {
+bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp) {
     int load_idx = -1;
     for (int k = len - 1; k >= 0 && k >= len - 10; k--) {
         if (program_bank[target][k].op == OP_LOAD) { load_idx = k; break; }
