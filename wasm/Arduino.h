@@ -17,6 +17,9 @@ public:
     String(const char* c) : str(c ? c : "") {}
     String(char c) : str(1, c) {}
     String(int val) : str(std::to_string(val)) {}
+    String(unsigned int val) : str(std::to_string(val)) {} // Added for native 32-bit unsigned matching
+    String(long val) : str(std::to_string(val)) {}
+    String(unsigned long val) : str(std::to_string(val)) {} // Added to completely squash test harness cast ambiguity
     String(const std::string& s) : str(s) {}
 
     String(float val, int decimalPlaces = 2) {
@@ -79,11 +82,17 @@ public:
     String operator+(const String& other) const { return String(str + other.str); }
     String operator+(const char* other) const { return String(str + other); }
     String operator+(char c) const { return String(str + c); }
+    String operator+(int val) const { return String(str + std::to_string(val)); }
+    String operator+(unsigned int val) const { return String(str + std::to_string(val)); }
+    String operator+(unsigned long val) const { return String(str + std::to_string(val)); }
     
     // The += operators
     String& operator+=(const String& other) { str += other.str; return *this; }
     String& operator+=(const char* other) { str += other; return *this; }
     String& operator+=(char c) { str += c; return *this; }
+    String& operator+=(int val) { str += std::to_string(val); return *this; }
+    String& operator+=(unsigned int val) { str += std::to_string(val); return *this; }
+    String& operator+=(unsigned long val) { str += std::to_string(val); return *this; }
     
     char operator[](int index) const { return str[index]; }
 };

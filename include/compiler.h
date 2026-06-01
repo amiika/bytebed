@@ -62,71 +62,109 @@ struct LambdaCtx {
 };
 
 /**
+ * System constant structure shared between compiler and decompiler.
+ */
+struct SystemConst {
+    const char* name;
+    float val;
+    bool init_on_startup;
+};
+
+/**
+ * Shared central definition table for math constants and environment registers.
+ */
+inline const SystemConst systemConstantsTable[] = {
+    {"steps",     0.0f,                  false},
+    {"sign",      0.0f,                  false},
+    {"beats",     0.0f,                  false},
+    {"bars",      0.0f,                  false},
+    {"step",      0.0f,                  true},
+    {"bar",       0.0f,                  true},
+    {"beat",      0.0f,                  true},
+    {"bpm",       120.0f,                true},
+    {"e",         (float)M_E,            true},
+    {"invpi",     (float)M_1_PI,         true},
+    {"invpi2",    (float)M_2_PI,         true},
+    {"invsqrtpi", (float)M_2_SQRTPI,     true},
+    {"ln10",      (float)M_LN10,         true},
+    {"ln2",       (float)M_LN2,          true},
+    {"log10e",    (float)M_LOG10E,       true},
+    {"log2e",     (float)M_LOG2E,        true},
+    {"pi",        (float)M_PI,           true},
+    {"pi2",       (float)M_PI_2,         true},
+    {"pi4",       (float)M_PI_4,         true},
+    {"sqrt12",    (float)M_SQRT1_2,      true},
+    {"sqrt2",     (float)M_SQRT2,        true},
+    {"sr",        8000.0f,               true},
+    {"t",         0.0f,                  true},
+    {"tau",       (float)(M_PI * 2.0),   true}
+};
+inline constexpr size_t systemConstantsCount = sizeof(systemConstantsTable) / sizeof(systemConstantsTable[0]);
+
+/**
+ * Symbol validation checker.
+ */
+inline bool isReservedSymbol(const String& name) {
+    int low = 0;
+    int high = (int)systemConstantsCount - 1;
+    
+    while (low <= high) {
+        int mid = low + ((high - low) >> 1);
+        int cmp = strcasecmp(name.c_str(), systemConstantsTable[mid].name);
+        
+        if (cmp == 0) return true;
+        if (cmp < 0) {
+            high = mid - 1;
+        } else {
+            low = mid + 1;
+        }
+    }
+    return false;
+}
+
+/**
  * Initializes the compiler state by clearing arrays and setting up math constants.
  */
 void initCompilerState();
 
 /**
- * Checks if a given string pointer represents a lambda definition.
- * @param p Pointer to the source string
- * @param params Array to store extracted parameter names
- * @param param_cnt Reference to store the parameter count
- * @param consume_len Reference to store the consumed string length
- * @return true if a lambda definition is found, false otherwise
+ * Compiles an infix formula into VM bytecode.
  */
-static bool isLambdaDef(const char* p, String* params, int& param_cnt, int& consume_len);
+bool compileInfix(String input, bool reset_t);
+
+/**
+ * Compiles an RPN formula into VM bytecode.
+ */
+bool compileRPN(String input);
+
+/**
+ * Checks if a given string pointer represents a lambda definition and parses optional defaults.
+ */
+bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len);
 
 /**
  * Parses a compound assignment operator from the input string.
- * @param p Pointer to the current character in the source string
- * @param outOp Reference to store the resolved OpCode
- * @param advanceBy Reference to store how many characters to advance
- * @return true if a compound operator is parsed, false otherwise
  */
-static bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy);
+bool parseCompoundOperator(const char* p, OpCode& outOp, int& advanceBy);
 
 /**
  * Tokenizes an input string for RPN compilation.
- * @param input The input string to tokenize
- * @param tokens Array to store the resulting tokens
- * @param max_tokens Maximum number of tokens allowed
- * @return The number of tokens parsed
  */
-static int tokenize(const String& input, String* tokens, int max_tokens);
+int tokenize(const String& input, String* tokens, int max_tokens);
 
 /**
  * Finds the start index of an expression in the program bank.
- * @param target The target bank index
- * @param end_pc The end program counter index
- * @return The starting program counter index of the expression
  */
-static int get_expr_start(uint8_t target, int end_pc);
+int get_expr_start(uint8_t target, int end_pc);
 
 /**
  * Flushes operators from the operator stack to the program bank.
- * @param target The target bank index
- * @param len Reference to the current program length
- * @param os Array of operators
- * @param os_id Array of operator IDs
- * @param ot Reference to the top index of the operator stack
- * @param cond_starts Array of condition start pointers
- * @param cs_ptr Reference to the condition start pointer index
- * @param stopAt The operator to stop flushing at
- * @param minPrec The minimum precedence level to flush
- * @param stopAtMarker Whether to stop at a store marker
  */
-static void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt = OP_NONE, int minPrec = -1, bool stopAtMarker = false);
+void flushOps(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, OpCode stopAt = OP_NONE, int minPrec = -1, bool stopAtMarker = false);
 
 /**
  * Applies a compound assignment operator dynamically.
- * @param target The target bank index
- * @param len Reference to the current program length
- * @param os Array of operators
- * @param os_id Array of operator IDs
- * @param ot Reference to the top index of the operator stack
- * @param assignOp The compound assignment operator to apply
- * @return true if successfully applied, false otherwise
  */
-static bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp);
+bool applyCompoundAssign(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, OpCode assignOp);
 
 #endif

@@ -1,8 +1,7 @@
 #include "vm.h"
 #include <emscripten.h>
 
-// Note: t_raw, current_play_mode, and current_sample_rate are no longer 
-// defined here because they are natively linked and managed by state.cpp.
+// Note: Started to rename out pythonism ... but was too lazy to update emulator.js for now.
 
 extern "C" {
     char wasm_input_buffer[2048]; 
@@ -11,7 +10,7 @@ extern "C" {
      * Helper to keep the WASM runtime variables injected and intact.
      * This protects system variables from being wiped during compilation.
      */
-    void inject_runtime_vars() {
+    void injectRuntimeVars() {
         int i_sr = getVarId("sr");
         vars[i_sr].type = 0;
         vars[i_sr].f = (float)current_sample_rate;
@@ -33,7 +32,7 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE bool wasm_compile(bool is_rpn) {
         String expr(wasm_input_buffer);
         bool success = is_rpn ? compileRPN(expr) : compileInfix(expr, true);
-        inject_runtime_vars(); 
+        injectRuntimeVars(); 
         return success;
     }
 
@@ -48,10 +47,10 @@ extern "C" {
     /**
      * Executes the virtual machine for a given discrete time step.
      * @param t Absolute time step index
-     * @return Resulting audio sample byte
+     * @return Resulting 32-bit audio sample stream word or mask
      */
-    EMSCRIPTEN_KEEPALIVE uint8_t wasm_execute(int32_t t) {
-        return execute_vm(t);
+    EMSCRIPTEN_KEEPALIVE uint32_t wasm_execute(int32_t t) {
+        return executeVm(t);
     }
 
     /**
@@ -71,7 +70,7 @@ extern "C" {
      */
     EMSCRIPTEN_KEEPALIVE void wasm_set_sample_rate(int rate) {
         current_sample_rate = rate;
-        inject_runtime_vars();
+        injectRuntimeVars();
     }
 
     /**
@@ -88,8 +87,8 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE void wasm_reset_vm() {
         var_count = 0;
         memset(vars, 0, sizeof(vars));
-        clear_global_array();
-        inject_runtime_vars();
+        clearGlobalArray();
+        injectRuntimeVars();
     }
 
     /**
@@ -126,7 +125,7 @@ extern "C" {
     }
 
     /**
-     * Fetches a formula string from the C++ preset banks.
+     * Evaluates a formula string from the C++ preset banks.
      * @param bank Bank index (0-9)
      * @param patch Patch index (0-9)
      * @return Pointer to the formula string

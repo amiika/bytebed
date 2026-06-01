@@ -24,6 +24,7 @@ struct Val {
         int32_t v;
         float f;
     };
+    int32_t len;
 };
 
 /**
@@ -59,17 +60,18 @@ String decompile(bool to_rpn);
 /**
  * Executes the VM for a single discrete time step.
  * @param t The absolute time step
- * @return The generated audio sample byte
+ * @return The generated 32-bit native audio sample stream word or mask
  */
-uint8_t execute_vm(int32_t t);
+uint32_t executeVm(int32_t t);
 
 /**
  * Executes a block of bytecode for audio generation.
- * @param start_t The starting time step
+ * @param start_t The starting time step (allows fractional alignment)
+ * @param t_step The timeline increment per sample
  * @param length The number of samples to generate
  * @param out_buf The output buffer to write to
  */
-void execute_vm_block(int32_t start_t, int length, uint8_t* out_buf);
+void executeVmBlock(float start_t, float t_step, int length, uint32_t* out_buf);
 
 /**
  * Updates IMU variables in the VM state.
@@ -94,7 +96,7 @@ void updateMouseVars(float mx, float my, float mv);
  * Updates the virtual machine memory with active MIDI parameters.
  * @param freq The frequency of the active MIDI note in Hertz
  * @param gate The velocity/gate state (0.0 for off, >0.0 for active)
- * @param note The raw MIDI note number (0-127)
+ * @param note Ocean raw MIDI note number (0-127)
  */
 void updateMIDIVars(float freq, float gate, float note);
 
@@ -111,16 +113,21 @@ extern int string_table_count;
 extern float* global_array_mem;
 extern int32_t global_array_capacity;
 
+extern float anchor_bpm;
+extern float anchor_beat;
+extern int32_t anchor_t;
+extern int anchor_sample_rate;
+
 /**
  * Clears the global array memory.
  */
-void clear_global_array();
+void clearGlobalArray();
 
 /**
  * Ensures the global array has the requested capacity.
  * @param req_size The required capacity size
  */
-void ensure_global_array(int32_t req_size);
+void ensureGlobalArray(int32_t req_size);
 
 extern String last_vm_error;
 
@@ -136,13 +143,13 @@ struct OpInfo {
     int precedence;
 };
 
-extern const MathFunc mathLibrary[23];
+extern const MathFunc mathLibrary[32];
 extern const int mathLibrarySize;
 
 extern const MathFunc shorthands[5];
 extern const int shorthandsSize;
 
-extern const OpInfo opList[42];
+extern const OpInfo opList[43];
 extern const int opListSize;
 
 /**
@@ -169,7 +176,7 @@ String getVarName(int id);
 
 /**
  * Checks if a variable is defined.
- * @param name The name to check
+ * @param name To check
  * @return true if defined, false otherwise
  */
 bool isVarDefined(const String& name); 

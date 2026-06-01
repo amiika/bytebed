@@ -44,11 +44,16 @@ enum OpCode : uint8_t {
     OP_ADD_ASSIGN, OP_SUB_ASSIGN, OP_MUL_ASSIGN, OP_DIV_ASSIGN, OP_MOD_ASSIGN,
     OP_AND_ASSIGN, OP_OR_ASSIGN, OP_XOR_ASSIGN, OP_POW_ASSIGN, OP_SHL_ASSIGN, OP_SHR_ASSIGN,
     OP_RAND,
-    OP_INT,
+    OP_INT, OP_PHASE,
     OP_DUP, OP_SWAP, OP_ROT, OP_OVER,
     OP_LOOP_PREP, OP_LOOP_EVAL, OP_LOOP_DONE, 
     OP_LOAD_STR, 
-    OP_COLON
+    OP_ENV, OP_LFO,
+    OP_COLON,
+    OP_PC, OP_EUCLID, OP_ON,
+    OP_DUR, OP_TO, OP_AT_MASK,
+    OP_DEFAULT_CHECK, OP_DEFAULT_INJECT,
+    OP_ARITY, OP_MASK_META
 };
 
 struct Theme {
@@ -91,6 +96,7 @@ extern uint32_t last_draw;
 extern PlayMode current_play_mode;
 extern int current_sample_rate;
 
+extern const char* bankNames[10];
 extern const PresetConfig defaultBanks[10][10];
 extern SlotState slots[10][10];
 extern int current_bank;
@@ -108,6 +114,19 @@ extern bool is_playing;
 
 extern char current_top_text[64];
 
+/**
+ * Gets the current responsive layout definitions.
+ * @return Layout Struct containing coordinates
+ */
 Layout getLayout();
+
+/**
+ * Calculates logarithmic volume curve mapped to an 8-bit scale.
+ * @return Scaled 0-255 volume value
+ */
 uint8_t getLogVolume();
+
+/**
+ * Pushes the current input buffer state to the undo history.
+ */
 void saveUndo();

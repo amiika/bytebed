@@ -323,7 +323,6 @@ class Scope {
 }
 
 const scope = new Scope();
-
 const workletCode = `
 class BytebeatWorklet extends AudioWorkletProcessor {
     constructor() {
@@ -333,6 +332,11 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         this.t_frac = 0;
         this.targetSampleRate = 8000;
         this.is_playing = false;
+        this.is_floatbeat = false;
+
+        this.current_val = 0;
+        this.next_val = 0;
+        this.has_init = false;
 
         this.port.onmessage = async (e) => {
             const msg = e.data;
@@ -354,15 +358,20 @@ class BytebeatWorklet extends AudioWorkletProcessor {
                 this.wasm.wasm_compile(msg.is_rpn);
             } else if (msg.type === 'play') {
                 this.is_playing = msg.playing;
+                if (!this.is_playing) this.has_init = false;
             } else if (msg.type === 'rate') {
                 this.targetSampleRate = msg.rate;
+                this.has_init = false; // Flush interpolation cache
                 if (this.wasm && this.wasm.wasm_set_sample_rate) this.wasm.wasm_set_sample_rate(msg.rate);
             } else if (msg.type === 'mode') {
+                this.is_floatbeat = (msg.mode === 1);
+                this.has_init = false; // Flush interpolation cache
                 if (this.wasm && this.wasm.wasm_set_play_mode) this.wasm.wasm_set_play_mode(msg.mode);
                 if (this.wasm && this.wasm.wasm_reset_vm) this.wasm.wasm_reset_vm();
             } else if (msg.type === 'reset') {
                 this.t_audio = 0;
                 this.t_frac = 0;
+                this.has_init = false;
                 if (this.wasm && this.wasm.wasm_reset_vm) this.wasm.wasm_reset_vm();
                 this.port.postMessage({ type: 'sync', t_audio: this.t_audio });
             } else if (msg.type === 'mouse') {
@@ -375,23 +384,48 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         };
     }
 
+    // Nasty fix to extract clean float format from WASM binary return
+    get_wasm_float(t) {
+        let sample = this.wasm.wasm_execute(t);
+        if (this.is_floatbeat) {
+            return ((sample >>> 0) / 2147483647.5) - 1.0;
+        } else {
+            return ((sample & 255) - 128) / 128.0; 
+        }
+    }
+
     process(inputs, outputs, parameters) {
         const out = outputs[0][0];
         if (!this.wasm || !this.is_playing) {
             out.fill(0);
+            this.has_init = false; 
             return true;
         }
 
         const timeStep = this.targetSampleRate / sampleRate;
+
+        // Initialize the first two boundary samples for the interpolator
+        if (!this.has_init) {
+            this.current_val = this.get_wasm_float(this.t_audio);
+            this.next_val = this.get_wasm_float(this.t_audio + 1);
+            this.has_init = true;
+        }
+
         for (let i = 0; i < out.length; i++) {
-            let sample = this.wasm.wasm_execute(this.t_audio);
-            out[i] = (sample - 128) / 128.0; 
+            // 1. Smoothly draw a line between the two true WASM samples
+            out[i] = this.current_val + this.t_frac * (this.next_val - this.current_val);
             
+            // 2. Advance the sub-sample fractional timeline
             this.t_frac += timeStep;
-            if (this.t_frac >= 1.0) {
-                let steps = Math.floor(this.t_frac);
-                this.t_audio += steps;
-                this.t_frac -= steps;
+            
+            // 3. When we cross a full WASM sample boundary, step the engine forward
+            while (this.t_frac >= 1.0) {
+                this.t_frac -= 1.0;
+                this.t_audio += 1;
+                
+                // Shift the buffer and ONLY execute the WASM engine once per target sample
+                this.current_val = this.next_val;
+                this.next_val = this.get_wasm_float(this.t_audio + 1);
             }
         }
         
@@ -478,6 +512,7 @@ window.cycleMIDIChannel = function(e) {
 
 /**
  * Queries WASM memory to seamlessly load the C++ hardware default patches.
+ * Automatically translates Infix presets to RPN if STACK mode is active.
  */
 async function loadPreset() {
     if (!wasm || !wasm.wasm_get_preset_formula) return;
@@ -504,7 +539,6 @@ async function loadPreset() {
     const rate = wasm.wasm_get_preset_rate(currentBank, currentPatch);
     const mode = wasm.wasm_get_preset_mode(currentBank, currentPatch);
 
-    formulaInput.value = str;
     isFloatbeat = (mode === 1);
     
     const formatBtn = document.getElementById('format-btn');
@@ -535,6 +569,19 @@ async function loadPreset() {
     scope.clearCanvas();
     scope.drawBuffer = [];
     
+    if (is_rpn) {
+        const encoder = new TextEncoder();
+        const encoded = encoder.encode(str);
+        view.set(encoded, inputPtr);
+        view[inputPtr + encoded.length] = 0;
+        
+        wasm.wasm_compile(false);
+        
+        formulaInput.value = getDecompiledText(true);
+    } else {
+        formulaInput.value = str;
+    }
+
     compile(formulaInput.value);
 
     autoExpand();
@@ -864,7 +911,7 @@ let wasmReadyPromise = (async function initWASM() {
         }
 
         initMIDI(); 
-        updateChannelButton(); // Ensure channel button UI matches loaded state
+        updateChannelButton(); 
         
         requestAnimationFrame(renderLoop);
     } catch (err) {
@@ -1041,8 +1088,19 @@ function renderLoop() {
     if (end_t - start_t > 4000) start_t = end_t - 4000;
     
     for (let t = start_t; t < end_t; t++) {
-        let val = wasm.wasm_execute(t);
-        scope.drawBuffer.push({ t: t, value: [val, val] });
+        let raw_val = wasm.wasm_execute(t);
+        let ui_sample = 0;
+        
+        if (isFloatbeat) {
+            let unsignedVal = raw_val >>> 0;
+            let norm_float = (unsignedVal / 2147483647.5) - 1.0;
+            ui_sample = Math.floor((norm_float + 1.0) * 127.5);
+        } else {
+            // Mask and clamp legacy 8-bit Bytebeat directly
+            ui_sample = raw_val & 255;
+        }
+        
+        scope.drawBuffer.push({ t: t, value: [ui_sample, ui_sample] });
     }
     
     t_viz = end_t;
@@ -1067,7 +1125,6 @@ formulaInput.addEventListener('input', (e) => { autoExpand(); if (wasm && is_aut
 function refreshMidiInputs(midiAccess) {
     midiInputs = Array.from(midiAccess.inputs.values());
     
-    // Bounds check the loaded state against physically available devices
     if (currentMidiPortIdx >= midiInputs.length) {
         currentMidiPortIdx = -1;
         localStorage.setItem('bytebed_midi_port', '-1');

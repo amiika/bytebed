@@ -119,15 +119,30 @@ void draw() {
     }
     
     // Formula Input Area
+    // Formula Input Area
     canvas.drawFastHLine(0, 21, 240, theme.dimColor);
     canvas.fillRect(0, L.input_y, 240, 135 - L.input_y, theme.bg); 
     canvas.drawFastHLine(0, L.input_y, 240, theme.dimColor);
-    canvas.setCursor(5, L.input_y + 4); 
-    canvas.print(input_buffer);
+
+    // FIX: Render text line by line to maintain the left margin (Gutter)
+    int cursor_x = 4;
+    int cursor_y = L.input_y + 4;
+    int chars_per_line = 39; // Adjust based on your font size
     
+    for (int i = 0; i < input_buffer.length(); i += chars_per_line) {
+        String line = input_buffer.substring(i, i + chars_per_line);
+        canvas.setCursor(cursor_x, cursor_y);
+        canvas.print(line);
+        cursor_y += 8; // Move down by font height
+    }
+
     // Animated Cursor
-    int c_x = 5 + (cursor_pos % 40) * 6;
-    int c_y = (L.input_y + 4) + (cursor_pos / 40) * 8;
+    int line_num = cursor_pos / chars_per_line;
+    int char_in_line = cursor_pos % chars_per_line;
+    
+    int c_x = 4 + (char_in_line * 6); // 6 is your font width
+    int c_y = (L.input_y + 4) + (line_num * 8);
+    
     canvas.drawFastVLine(c_x, c_y, 10, is_playing ? theme.primaryColor : TFT_RED);
     
     canvas.pushSprite(0, 0);

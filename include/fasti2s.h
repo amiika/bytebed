@@ -46,11 +46,9 @@ public:
         i2s_channel_enable(tx_chan);
     }
 
-    // By making this inline in a header, we eliminate function-call overhead in the DSP loop
     inline void pushStereoBlock(int16_t* buffer, size_t frames) {
         if (!tx_chan) return;
         size_t bytes_written;
-        // Native silicon blocking. Core 1 sleeps instantly until the exact microsecond the DMA needs data.
         i2s_channel_write(tx_chan, buffer, frames * 4, &bytes_written, portMAX_DELAY);
     }
 };

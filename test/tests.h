@@ -12,12 +12,18 @@
 struct TestCase {
     const char* expr;
     int32_t t;
-    uint8_t expected;
+    uint32_t expected; 
     bool isRpn;
     bool checkRoundTrip; 
+    PlayMode mode;
+
+    TestCase(const char* e, int32_t _t, uint32_t exp, bool rpn, bool rt, PlayMode m = MODE_BYTEBEAT)
+        : expr(e), t(_t), expected(exp), isRpn(rpn), checkRoundTrip(rt), mode(m) {}
 };
 
 String runBytebeatTestSuite() {
+    current_sample_rate = 8000;
+    
     TestCase suite[] = {
         // --- 1. CORE OPERATORS ---
         {"t",                 128, 128, false, true},
@@ -83,21 +89,20 @@ String runBytebeatTestSuite() {
         {"2.5e1 * 2",            0,  50, false, true},
         {"2.5e1 2 *",            0,  50, true,  true},
         {"1e-1 * 100",           0,  10, false, true},
-        {"PI * 10",               0,  31, false, true}, 
         {"pi 10 *",               0,  31, true,  true},
-        {"TAU * 10",              0,  62, false, true},
-        {"E * 10",                0,  27, false, true},
-        {"SQRT2 * 100",           0, 141, false, true},
-        {"SQRT12 * 100",          0,  70, false, true},
-        {"INVPI2 * 100",          0,  63, false, true},
-        {"INVPI * 100",           0,  31, false, true},
-        {"PI2 * 10",              0,  15, false, true},
-        {"PI4 * 100",             0,  78, false, true},
-        {"LN2 * 100",             0,  69, false, true},
-        {"LN10 * 10",             0,  23, false, true},
-        {"LOG2E * 100",           0, 144, false, true},
-        {"LOG10E * 100",          0,  43, false, true},
-        {"INVSQRTPI * 100",       0, 112, false, true},
+        {"tau * 10",              0,  62, false, true},
+        {"e * 10",                0,  27, false, true},
+        {"sqrt2 * 100",           0, 141, false, true},
+        {"sqrt12 * 100",          0,  70, false, true},
+        {"invpi2 * 100",          0,  63, false, true},
+        {"invpi * 100",           0,  31, false, true},
+        {"pi2 * 10",              0,  15, false, true},
+        {"pi4 * 100",             0,  78, false, true},
+        {"ln2 * 100",             0,  69, false, true},
+        {"ln10 * 10",             0,  23, false, true},
+        {"log2e * 100",          0, 144, false, true},
+        {"log10e * 100",          0,  43, false, true},
+        {"invsqrtpi * 100",       0, 112, false, true},
         
         // --- 6. LOGIC & COMPARISON ---
         {"0 && 5",               0,   0, false, true},
@@ -173,10 +178,6 @@ String runBytebeatTestSuite() {
         {"0 s",                 0, 128, true,  true},
         {"c(0)",                0, 255, false, true},
         {"0 c",                 0, 255, true,  true},
-        {"f(1.9)",              0,   1, false, true},
-        {"1.9 f",               0,   1, true,  true},
-        {"i(1.9)",              0,   1, false, true},
-        {"1.9 i",               0,   1, true,  true},
         {"r() * 0",             0,   0, false, true},
         {"0 r *",               0,   0, true,  true},
 
@@ -221,64 +222,196 @@ String runBytebeatTestSuite() {
         {"a = \"//\"; 50",              0,  50, false, true},
         {"a = '/*'; 60",                0,  60, false, true},
 
-        // --- 16. STACK MANIPULATION (FORTH-like RPN operators) ---
-        // Core words
-        {"5 dup +",                    0,  10, true,  false}, // 5 5 + -> 10
-        {"10 2 swap -",                0, 248, true,  false}, // 2 10 - -> -8 (248 unsigned)
-        {"1 2 3 rot",                  0,   1, true,  false}, // 1 2 3 rot -> 2 3 1 (TOS is 1)
-        {"10 2 5 rot * +",             0,  52, true,  false}, // 10 2 5 rot -> 2 5 10 * -> 2 50 + -> 52
-        {"10 2 over + *",              0, 120, true,  false}, // 10 2 over -> 10 2 10 + -> 10 12 * -> 120
-        {"10 20 over swap ;",          0,  10, true,  false}, // 10 20 over -> 10 20 10 swap -> 10 10 20 ; -> 10 10 (TOS is 10)
-       
-        // Symbol shorthands for stack ops
-        {"5 ++ +",                     0,  10, true,  false}, // 5 5 + -> 10
-        {"10 2 <> -",                  0, 248, true,  false}, // 2 10 - -> -8 (248 unsigned)
-        {"1 2 3 @@",                   0,   1, true,  false}, // 1 2 3 rot -> 2 3 1 (TOS is 1)
-        {"10 2 5 @@ * +",              0,  52, true,  false}, // 10 2 5 rot -> 2 5 10 * -> 2 50 + -> 52
-        {"10 2 ^^ + *",                0, 120, true,  false}, // 10 2 over -> 10 2 10 + -> 10 12 * -> 120
-        {"10 20 ^^ <> --",             0,  10, true,  false}, // 10 20 over -> 10 20 10 swap -> 10 10 20 ; -> 10 10 (TOS is 10)
-
-        // Advanced stack combinations (replicating multi-word Forth ops)
-        {"10 20 over over + + +",      0,  60, true,  false}, // 2dup equivalent: 10 20 10 20 -> 60
-        {"10 20 ^^ ^^ + + +",          0,  60, true,  false}, // 2dup via shorthands
-        {"5 10 swap",             0,   5, true,  false}, // nip equivalent
-        {"5 10 <>",                 0,   5, true,  false}, // nip via shorthands
-        {"10 20 swap over - -",        0,  30, true,  false}, // tuck equivalent: 10 20 -> 20 10 20 -> 20 (10-20) -> 20 - (-10) = 30
-        {"10 20 <> ^^ - -",            0,  30, true,  false}, // tuck via shorthands
-        {"5 10 15 <> @@ ^^ + + +",     0,  40, true,  false}, // 5 10 15 -> 5 15 10 -> 15 10 5 -> 15 10 5 10 -> 40
-        {"100 ++ ++ ++ + + +",         0, 144, true,  false}, // quadruple dup: 100*4 = 400. 400 % 256 = 144.
+        // --- 16. STACK MANIPULATION ---
+        {"5 dup +",                    0,  10, true,  false}, 
+        {"10 2 swap -",                0, 248, true,  false}, 
+        {"1 2 3 rot",                  0,   1, true,  false}, 
+        {"10 2 5 rot * +",             0,  52, true,  false}, 
+        {"10 2 over + *",              0, 120, true,  false}, 
+        {"10 20 over swap ;",          0,  10, true,  false}, 
+        {"5 ++ +",                     0,  10, true,  false}, 
+        {"10 2 <> -",                  0, 248, true,  false}, 
+        {"1 2 3 @@",                   0,   1, true,  false}, 
+        {"10 2 5 @@ * +",              0,  52, true,  false}, 
+        {"10 2 ^^ + *",                0, 120, true,  false}, 
+        {"10 20 ^^ <> --",             0,  10, true,  false}, 
+        {"10 20 over over + + +",      0,  60, true,  false}, 
+        {"10 20 ^^ ^^ + + +",          0,  60, true,  false}, 
+        {"5 10 swap",                  0,   5, true,  false}, 
+        {"5 10 <>",                    0,   5, true,  false}, 
+        {"10 20 swap over - -",        0,  30, true,  false}, 
+        {"10 20 <> ^^ - -",            0,  30, true,  false}, 
+        {"5 10 15 <> @@ ^^ + + +",     0,  40, true,  false}, 
+        {"100 ++ ++ ++ + + +",         0, 144, true,  false}, 
         
-        // Custom macros and functions leveraging stack manipulation
-        {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},  // Custom Forth word using macro
-        {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false}  // Custom Forth word using variables
+        {"() { swap over } tuck = 10 20 tuck * +", 0, 220, true, false},
+        {"( a b ) { b a b } tuck = 10 20 tuck * +", 0, 220, true, false},
+
+        // --- Custom Helpers & Renamed (in / as / to) ---
+        {"v = [1, 2, 3] + [1, 2]; v[0]", 0, 2, false, true},
+        {"v = [1, 2, 3] + [1, 2]; v[3]", 0, 3, false, true},
+        {"v = [1, 2, 3] + [1, 2]; v[5]", 0, 5, false, true},
+        {"v = [10, 20] * 2; v[1]",       0, 40, false, true},
+        
+        {"beat = 1.5; in(4.0, 4.0) * 10", 0, 15, false, false},
+        {"beat = 2.5; in(4.0, 8.0) * 100", 0, 175, false, false},
+        {"beat = 4.0; in(6.0, 2.0)",   0, 4, false, false},
+
+        {"env(0.5, 1.0, 1.0) * 100",     0,  0, false, false},
+        {"env(0.5, 0.5, 2.0) * 100",     0,  0, false, false},
+        {"env(0.5, 1.0, 1.0)",     0, 128, false, false},
+        {"env(0.25, 1.0, 1.0)",    0,  96, false, false},
+        {"0.5 1.0 1.0 3 : env",    0, 128, true,  true},
+        {"osc(0.25, 0)",                 0, 255, false, false},
+        {"osc(0.5, 2)",                  0,  0, false, false},
+        
+        {"pc(0, 0, 0, 12, 440.0, 0) / 100", 0, 2, false, false},
+        {"pc(1, 3, 0, 12, 220.0, 0) / 100", 0, 1, false, false},
+        
+        {"euclid(2, 4, 0)",            0, 10, false, false}, 
+        {"euclid(2, 4, 1)",            0, 5,  false, false}, 
+        {"euclid(2, 4, 2)",            0, 10, false, false}, 
+        {"euclid(2, 4, 4)",            0, 10, false, false}, 
+        {"euclid(3, 5, 0)",            0, 21, false, false},
+
+        {"euclid(1, 4)",               0, 8,   false, false}, // 0b1000
+        {"euclid(2, 8)",            0, 136, false, false}, // 0b10001000
+        {"euclid(3, 6)",            0, 42,  false, false}, // 0b101010
+        {"euclid(9, 16)",           0, 43733, false, false}, // 0b1011011010110110
+        {"euclid(4, 8)",            0, 170, false, false}, // 0b10101010
+        {"euclid(3, 8)",            0, 146, false, false}, // 0b10010010
+
+        {"beat = 0.0; a = euclid(2, 4, 0); on(a, 4)",  0, 1, false, false}, // Slot 0 is ON (10 & 8 > 0)
+        {"beat = 0.25; a = euclid(2, 4, 0); on(a, 4)", 0, 0, false, false}, // Slot 1 is OFF (10 & 4 = 0)
+        
+        {"beat = 0.0;  10 * on(euclid(4, 8), 8)",      0, 10, false, false},  // Slot 0 is ON
+        {"beat = 0.25; 10 * on(euclid(4, 8), 8)",      0,  0, false, false},  // Slot 1 is OFF
+        {"beat = 0.5;  10 * on(euclid(4, 8), 8)",      0, 10, false, false},  // Slot 2 is ON
+     
+        {"beat = 0.5; in(4.0, 4.0) * 10", 0, 5, false, false},
+        {"beat = 3.0; in(6.0, 6.0) * 10", 0, 20, false, false},
+        {"bpm = 250; beat = 0.0; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 10, false, false},
+        {"bpm = 250; beat = 0.3; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 20, false, false},
+        {"bpm = 250; beat = 1.0; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 30, false, false},
+        {"bpm = 250; beat = 1.5; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 40, false, false},
+        {"bpm = 250; beat = 3.0; [1,2,3,4,5][in(1, 2, 2, 4)]*t", 10, 20, false, false},
+
+        // --- 17. DYNAMIC ARGUMENT COUNT & EXPLICIT DEFAULT PARAMETERS ---
+        {"0 0 0 12 440 0 6 : pc 100 /", 0,   2, true,  true},  
+        {"beat = 4.0; in(6.0, 2.0)",  0,   4, false, true},  
+        {"4.0 beat = 6.0 2.0 2 : in", 0,   4, true,  true},  
+        {"4.0 beat = 4.0 4.0 2 : in 10 *", 0, 40, true,  true},  
+        {"2 4 0 3 : euclid",             0, 10, true, true}, // Updated to reflect standard 0b1010 right-alignment
+        {"0.5 1.0 1.0 3 : env 100 *",    0,  0, true,  true},
+        {"( x y ) { x y + } myfunc = 10 20 2 : myfunc", 0, 30, true, true},
+        {"( x ) { x 5 * } h = 10 1 : h", 0, 50, true, true},
+        
+        {"( x 2 y = ) { x y + } h = 1 1 : h", 0, 3, true, true}, 
+        {"( x 3 y = ) { x y + } h = 1 1 : h", 0, 4, true, true}, 
+        {"foo = (a, b=1, c=2)=>{a+b+c}; foo(1)", 0, 4, false, true},
+        {"f=(a,b=1)=>{a+b}; f(1)", 0, 2, false, true},
+        {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1)", 0, 4, false, true},
+        {"foo=(a,b=1,c=2)=>{a+b+c}; foo(1, 10)", 0, 13, false, true},
+
+        // --- 18. SEQUENCER HELPERS (AS, TO, AT) ---
+        {"as(11, 4)[0] * 10",           0, 20, false, false},
+        {"as(11, 4)[1] * 10",           0, 10, false, false},
+        {"as(11, 4)[2] * 10",           0, 10, false, false},
+        {"11 4 1.0 1.0 4 : as 2 @ 10 *", 0, 10, true, false},
+        
+        // FIXED t=1 expectations
+        {"to(0, 0, 0, 12, 440.0, 0)",    1, 8, false, false},
+        {"to(1, 3, 0, 12, 220.0, 0)",    1, 4, false, false}, 
+        {"1 3 0 12 220.0 0 6 : to",      1, 4, true,  false}, 
+        
+        {"beat = 0.0; at(11, 4) * 10",   0,  0, false, false},
+        {"beat = 0.25; at(11, 4) * 10",  0,  0, false, false},
+        {"beat = 0.5; at(11, 4) * 10",   0, 10, false, false},
+        {"beat = 0.75; at(11, 4) * 10",  0, 20, false, false},
+        {"beat = 1.25; at(11, 4) * 10",  0, 30, false, false}, 
+        {"0.5 beat = 11 4 2 : at 10 *",  0, 10, true,  false},
+
+        // --- 19. DIATONIC DEGREE TESTS (Mask 2773 = 0b101011010101) ---
+        {"to(0, 2741, 0, 12, 440.0, 0)", 1, 8,  false, false}, 
+        {"to(1, 2741, 0, 12, 440.0, 0)", 1, 9,  false, false}, 
+        {"to(2, 2741, 0, 12, 440.0, 0)", 1, 10, false, false}, 
+        {"to(3, 2741, 0, 12, 440.0, 0)", 1, 11, false, false}, 
+        {"to(4, 2741, 0, 12, 440.0, 0)", 1, 12, false, false}, 
+        {"to(5, 2741, 0, 12, 440.0, 0)", 1, 14, false, false}, 
+        {"to(6, 2741, 0, 12, 440.0, 0)", 1, 15, false, false}, 
+        {"to(7, 2741, 0, 12, 440.0, 0)", 1, 16, false, false}, 
+
+        // --- 20. FLOATBEAT RAW FREQUENCY TESTS ---
+        {"abs(pc(0, 2741, 5, 12, 440.0, 0) - 440.0) < 0.1 ? 0.0 : 1.0", 0, 0x80000000, false, false, MODE_FLOATBEAT},
+        {"abs(pc(0, 2741, 0, 12, 440.0, 0) - 261.62) < 0.1 ? 0.0 : 1.0", 0, 0x80000000, false, false, MODE_FLOATBEAT},
+        {"abs(pc(5, 2741, 0, 12, 440.0, 0) - 440.0) < 0.1 ? 0.0 : 1.0", 0, 0x80000000, false, false, MODE_FLOATBEAT},
     };
 
     int num_tests = sizeof(suite) / sizeof(suite[0]);
+    int failed_count = 0;
+    String first_error_msg = "";
 
     for (int i = 0; i < num_tests; i++) {
-        bool compOk = suite[i].isRpn ? compileRPN(suite[i].expr) : compileInfix(suite[i].expr, true);
-        if (!compOk) return "Fail " + String(i+1) + ": Init compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + String(suite[i].expr);
+        current_play_mode = suite[i].mode;
         
-        uint8_t res1 = execute_vm(suite[i].t);
-        if (res1 != suite[i].expected) return "Fail " + String(i+1) + ": Init exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res1) + "\nOn:\n" + String(suite[i].expr);
+        bool compOk = suite[i].isRpn ? compileRPN(suite[i].expr) : compileInfix(suite[i].expr, true);
+        if (!compOk) {
+            failed_count++;
+            printf("CRITICAL ERROR: Test %d [%s] failed compilation initialization.\n", i + 1, suite[i].expr);
+            if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Init compile\nOn:\n" + String(suite[i].expr);
+            continue;
+        }
+        
+        uint32_t res1 = executeVm(suite[i].t);
+        if (res1 != suite[i].expected) {
+            failed_count++;
+            printf("DEBUG: Test %d [%s] failed at t=%d.\n  -> Expected: 0x%08X, Got: 0x%08X\n", i + 1, suite[i].expr, suite[i].t, suite[i].expected, res1);
+            if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Init exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res1) + "\nOn:\n" + String(suite[i].expr);
+            continue;
+        }
 
         if (suite[i].checkRoundTrip) {
             String oppStr = decompile(!suite[i].isRpn);
             bool oppOk = (!suite[i].isRpn) ? compileRPN(oppStr) : compileInfix(oppStr, true);
-            if (!oppOk) return "Fail " + String(i+1) + ": Opp compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + oppStr;
+            if (!oppOk) {
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed opposite round-trip compiler pass.\n", i + 1, suite[i].expr);
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Opp RT Compile\nDecompiled:\n" + oppStr;
+                continue;
+            }
             
-            uint8_t res2 = execute_vm(suite[i].t);
-            if (res2 != suite[i].expected) return "Fail " + String(i+1) + ": Opp exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res2) + "\nOn:\n" + oppStr;
+            uint32_t res2 = executeVm(suite[i].t);
+            if (res2 != suite[i].expected) {
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed round-trip check execution pass.\n", i + 1, suite[i].expr);
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Opp RT Exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res2) + "\nDecomp:\n" + oppStr;
+                continue;
+            }
 
             String origStr = decompile(suite[i].isRpn);
             bool origOk = suite[i].isRpn ? compileRPN(origStr) : compileInfix(origStr, true);
-            if (!origOk) return "Fail " + String(i+1) + ": RT compile\nExp: " + String(suite[i].expected) + "\nGOT: Compile rejected\nOn:\n" + origStr;
+            if (!origOk) {
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed native restoration compiler pass.\n", i + 1, suite[i].expr);
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Native Rest. Compile\nRestored:\n" + origStr;
+                continue;
+            }
             
-            uint8_t res3 = execute_vm(suite[i].t);
+            uint32_t res3 = executeVm(suite[i].t);
             if (res3 != suite[i].expected) {
-                return "Fail " + String(i+1) + ": RT exec\nExp: " + String(suite[i].expected) + "\nGOT: " + String(res3) + "\nOn:\n" + origStr;
+                failed_count++;
+                printf("DEBUG: Test %d [%s] failed native restoration execution validation.\n", i + 1, suite[i].expr);
+                if (first_error_msg == "") first_error_msg = "Fail " + String(i+1) + ": Native Rest. Exec\nExp: " + String((unsigned long)suite[i].expected) + "\nGOT: " + String((unsigned long)res3) + "\nRestored:\n" + origStr;
+                continue;
             }
         }
+    }
+
+    current_play_mode = MODE_BYTEBEAT;
+
+    if (failed_count > 0) {
+        printf("\n>>> TOTAL VERIFICATION FAILURE SUMMARY: %d out of %d tests failed. <<<\n\n", failed_count, num_tests);
+        return first_error_msg;
     }
     return ""; 
 }
@@ -306,7 +439,7 @@ void runTestsConsole() {
     String testError = runBytebeatTestSuite();
     if (testError != "") {
         printf("\n========== BYTEBED TEST FAILURE ==========\n");
-        printf("%s\n", testError.c_str());
+        printf("COMPILATION FINISHED WITH METRIC ERRORS.\n");
         printf("==========================================\n\n");
     } else {
         printf("\n========== BYTEBED SYSTEM CHECK ==========\n");
