@@ -57,6 +57,7 @@ Bytebed started as a simple bytecode virtual machine for the bytebeat. Main feat
 + alt + 0-9: Save patch to location
 + ctrl + z/r: Undo & Redo
 + fn + 1-4: Classic visualizations
++ fn + -/+: Scale visualization timeline
 + fn + 0: History view
 + fn + t: Change theme color
 + fn + s: Change samplerate

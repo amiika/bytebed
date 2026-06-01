@@ -9,6 +9,10 @@ extern String last_vm_error;
     #define P_ERR(shortMsg, longMsg) do { last_vm_error = String(shortMsg); return false; } while(0)
 #endif
 
+
+/**
+ * Emits a string literal into the program bank, managing the string table and ensuring efficient storage.
+ */
 static void emitStringLiteral(uint8_t target, int& len, const String& extracted) {
     int str_id = string_table_count;
     if (string_table_count < 64) {
@@ -17,6 +21,9 @@ static void emitStringLiteral(uint8_t target, int& len, const String& extracted)
     program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
 }
 
+/**
+ * Emits a loop iterator setup into the program bank.
+ */
 static void emitLoopIterator(uint8_t target, int& len, int ltype) {
     program_bank[target][len++] = {OP_LOOP_PREP, (int32_t)ltype};
     int start_pc = len;
@@ -27,6 +34,9 @@ static void emitLoopIterator(uint8_t target, int& len, int ltype) {
     program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
 }
 
+/**
+ * Emits lambda parameter bindings into the program bank.
+ */
 static void emitLambdaBindings(uint8_t target, int& len, int param_cnt, const int* p_ids, const bool* has_def, const float* def_vals) {
     for (int i = param_cnt - 1; i >= 0; i--) {
         if (has_def[i]) {
@@ -39,6 +49,9 @@ static void emitLambdaBindings(uint8_t target, int& len, int param_cnt, const in
     }
 }
 
+/**
+ * Closes the lambda infix context, flushing any remaining operations and managing variable lifetimes.
+ */
 static void closeLambdaInfix(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, LambdaCtx& lam) {
     flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
     if (ot >= 0 && os[ot] == OP_NONE) ot--; 
@@ -55,6 +68,9 @@ static void closeLambdaInfix(uint8_t target, int& len, OpCode* os, int* os_id, i
     for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
 }
 
+/**
+ * Emits dynamic call arguments into the program bank.
+ */
 static void emitDynamicCallArgs(uint8_t target, int& len, int args, int os_id_val) {
     if (os_id_val != -1) {
         program_bank[target][len++] = {OP_LOAD, (int32_t)os_id_val}; 
@@ -79,6 +95,9 @@ static void emitDynamicCallArgs(uint8_t target, int& len, int args, int os_id_va
     }
 }
 
+/**
+ * Supports single-line (//) and multi-line comments, while preserving string literals.
+ */
 static String stripComments(const String& input) {
     String result = "";
     #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
