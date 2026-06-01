@@ -9,9 +9,76 @@ extern String last_vm_error;
     #define P_ERR(shortMsg, longMsg) do { last_vm_error = String(shortMsg); return false; } while(0)
 #endif
 
-/**
- * Supports single-line (//) and multi-line comments, while preserving string literals.
- */
+static void emitStringLiteral(uint8_t target, int& len, const String& extracted) {
+    int str_id = string_table_count;
+    if (string_table_count < 64) {
+        string_table[string_table_count++] = extracted;
+    } else { str_id = 63; }
+    program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
+}
+
+static void emitLoopIterator(uint8_t target, int& len, int ltype) {
+    program_bank[target][len++] = {OP_LOOP_PREP, (int32_t)ltype};
+    int start_pc = len;
+    program_bank[target][len++] = {OP_LOOP_EVAL, 0};
+    int eval_pc = len - 1;
+    program_bank[target][len++] = {OP_LOOP_DONE, 0};
+    program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
+    program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
+}
+
+static void emitLambdaBindings(uint8_t target, int& len, int param_cnt, const int* p_ids, const bool* has_def, const float* def_vals) {
+    for (int i = param_cnt - 1; i >= 0; i--) {
+        if (has_def[i]) {
+            program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(i + 1)};
+            program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(def_vals[i])};
+        }
+    }
+    for (int i = param_cnt - 1; i >= 0; i--) {
+        program_bank[target][len++] = {OP_BIND, (int32_t)p_ids[i]};
+    }
+}
+
+static void closeLambdaInfix(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, LambdaCtx& lam) {
+    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
+    if (ot >= 0 && os[ot] == OP_NONE) ot--; 
+    
+    int assigns_to_keep[64]; int atk_cnt = 0;
+    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
+        if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; 
+        ot--;
+    }
+    
+    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
+    program_bank[target][len++] = {OP_RET, 0}; 
+    program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
+    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
+}
+
+static void emitDynamicCallArgs(uint8_t target, int& len, int args, int os_id_val) {
+    if (os_id_val != -1) {
+        program_bank[target][len++] = {OP_LOAD, (int32_t)os_id_val}; 
+        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
+    } else {
+        if (args > 0) {
+            int args_start = len;
+            for (int i = 0; i < args; i++) args_start = get_expr_start(target, args_start - 1);
+            int expr_start = get_expr_start(target, args_start - 1);
+            
+            int expr_len = args_start - expr_start;
+            int args_len = len - args_start;
+            
+            std::unique_ptr<Instruction[]> temp_buf(new Instruction[512]);
+            memcpy(temp_buf.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
+            
+            int ptr = expr_start;
+            memcpy(&program_bank[target][ptr], &temp_buf[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
+            memcpy(&program_bank[target][ptr], &temp_buf[0], expr_len * sizeof(Instruction));
+        }
+        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
+    }
+}
+
 static String stripComments(const String& input) {
     String result = "";
     #if !defined(NATIVE_BUILD) && !defined(__EMSCRIPTEN__)
@@ -73,96 +140,11 @@ static String stripComments(const String& input) {
 }
 
 /**
- * Emits a string literal into the program bank, managing the string table and ensuring efficient storage.
- */
-static void emitStringLiteral(uint8_t target, int& len, const String& extracted) {
-    int str_id = string_table_count;
-    if (string_table_count < 64) {
-        string_table[string_table_count++] = extracted;
-    } else { str_id = 63; }
-    program_bank[target][len++] = {OP_LOAD_STR, (int32_t)str_id};
-}
-
-/**
- * Emits a loop iterator setup into the program bank.
- */
-static void emitLoopIterator(uint8_t target, int& len, int ltype) {
-    program_bank[target][len++] = {OP_LOOP_PREP, (int32_t)ltype};
-    int start_pc = len;
-    program_bank[target][len++] = {OP_LOOP_EVAL, 0};
-    int eval_pc = len - 1;
-    program_bank[target][len++] = {OP_LOOP_DONE, 0};
-    program_bank[target][eval_pc].val = (int32_t)(len - eval_pc);
-    program_bank[target][len - 1].val = (int32_t)(len - start_pc + 1);
-}
-
-/**
- * Emits lambda parameter bindings into the program bank.
- */
-static void emitLambdaBindings(uint8_t target, int& len, int param_cnt, const int* p_ids, const bool* has_def, const float* def_vals) {
-    for (int i = param_cnt - 1; i >= 0; i--) {
-        if (has_def[i]) {
-            program_bank[target][len++] = {OP_DEFAULT_CHECK, (int32_t)(i + 1)};
-            program_bank[target][len++] = {OP_DEFAULT_INJECT, setF(def_vals[i])};
-        }
-    }
-    for (int i = param_cnt - 1; i >= 0; i--) {
-        program_bank[target][len++] = {OP_BIND, (int32_t)p_ids[i]};
-    }
-}
-
-/**
- * Closes the lambda infix context, flushing any remaining operations and managing variable lifetimes.
- */
-static void closeLambdaInfix(uint8_t target, int& len, OpCode* os, int* os_id, int& ot, int* cond_starts, int& cs_ptr, LambdaCtx& lam) {
-    flushOps(target, len, os, os_id, ot, cond_starts, cs_ptr, OP_NONE, -1, true);
-    if (ot >= 0 && os[ot] == OP_NONE) ot--; 
-    
-    int assigns_to_keep[64]; int atk_cnt = 0;
-    while (ot >= 0 && (os[ot] == OP_STORE || os[ot] == OP_ASSIGN_VAR || os[ot] == OP_STORE_AT || (os[ot] >= OP_ADD_ASSIGN && os[ot] <= OP_SHR_ASSIGN))) {
-        if (atk_cnt < 64) assigns_to_keep[atk_cnt++] = os_id[ot]; 
-        ot--;
-    }
-    
-    for (int i = lam.p_cnt - 1; i >= 0; i--) program_bank[target][len++] = {OP_UNBIND, (int32_t)lam.p_ids[i]};
-    program_bank[target][len++] = {OP_RET, 0}; 
-    program_bank[target][lam.start_pc].val = (int32_t)(len - lam.start_pc); 
-    for (int i = 0; i < atk_cnt; i++) program_bank[target][len++] = {OP_STORE_KEEP, (int32_t)assigns_to_keep[i]};
-}
-
-/**
- * Emits dynamic call arguments into the program bank.
- */
-static void emitDynamicCallArgs(uint8_t target, int& len, int args, int os_id_val) {
-    if (os_id_val != -1) {
-        program_bank[target][len++] = {OP_LOAD, (int32_t)os_id_val}; 
-        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
-    } else {
-        if (args > 0) {
-            int args_start = len;
-            for (int i = 0; i < args; i++) args_start = get_expr_start(target, args_start - 1);
-            int expr_start = get_expr_start(target, args_start - 1);
-            
-            int expr_len = args_start - expr_start;
-            int args_len = len - args_start;
-            
-            std::unique_ptr<Instruction[]> temp_buf(new Instruction[512]);
-            memcpy(temp_buf.get(), &program_bank[target][expr_start], (expr_len + args_len) * sizeof(Instruction));
-            
-            int ptr = expr_start;
-            memcpy(&program_bank[target][ptr], &temp_buf[expr_len], args_len * sizeof(Instruction)); ptr += args_len;
-            memcpy(&program_bank[target][ptr], &temp_buf[0], expr_len * sizeof(Instruction));
-        }
-        program_bank[target][len++] = {OP_DYN_CALL, (int32_t)args}; 
-    }
-}
-
-/**
  * Universal high-performance numeric parser for the VM.
  * Supports Binary (0b), Hex (0x), Decimal, and standard floats.
  * Packages binary masks directly into smart Val containers carrying length metadata.
  */
-bool parseNumber(const char*& p, Val& outVal) {
+static bool parseNumber(const char*& p, Val& outVal) {
     const char* start = p;
     bool is_neg = false;
     
@@ -795,36 +777,24 @@ bool compileRPN(String input) {
  * Initializes the compiler state by clearing arrays and setting up math constants.
  */
 void initCompilerState() {
-clearGlobalArray(); 
+    clearGlobalArray(); 
     string_table_count = 0; 
     var_count = 0; 
     memset(vars, 0, sizeof(vars)); 
 
     if (current_sample_rate <= 0) current_sample_rate = 8000;
     
-    vars[getVarId("t")] = {0, 0}; 
-    vars[getVarId("bpm")] = {0, setF(120.0f)}; 
-    vars[getVarId("sr")] = {0, setF((float)current_sample_rate)};
-    vars[getVarId("tick")] = {0, 0};
-    vars[getVarId("beat")] = {0, 0};
-    vars[getVarId("bar")] = {0, 0};
-    vars[getVarId("PI")] = {0, setF(M_PI)};
-    vars[getVarId("pi")] = {0, setF(M_PI)};
-    vars[getVarId("TAU")] = {0, setF(M_PI * 2.0)};
-    vars[getVarId("tau")] = {0, setF(M_PI * 2.0)};
-    vars[getVarId("E")]  = {0, setF(M_E)};
-    vars[getVarId("e")]  = {0, setF(M_E)};
-    vars[getVarId("LOG2E")] = {0, setF(M_LOG2E)};
-    vars[getVarId("LOG10E")] = {0, setF(M_LOG10E)};
-    vars[getVarId("LN2")] = {0, setF(M_LN2)};
-    vars[getVarId("LN10")] = {0, setF(M_LN10)};
-    vars[getVarId("PI2")] = {0, setF(M_PI_2)};
-    vars[getVarId("PI4")] = {0, setF(M_PI_4)};
-    vars[getVarId("INVPI")] = {0, setF(M_1_PI)};
-    vars[getVarId("INVPI2")] = {0, setF(M_2_PI)};
-    vars[getVarId("INVSQRTPI")] = {0, setF(M_2_SQRTPI)};
-    vars[getVarId("SQRT2")] = {0, setF(M_SQRT2)};
-    vars[getVarId("SQRT12")] = {0, setF(M_SQRT1_2)};
+    for (size_t i = 0; i < systemConstantsCount; i++) {
+        if (!systemConstantsTable[i].init_on_startup) {
+            continue; // Skip initialization for bars, steps, sign, etc.
+        }
+        
+        float val = systemConstantsTable[i].val;
+        if (strcmp(systemConstantsTable[i].name, "sr") == 0) {
+            val = (float)current_sample_rate;
+        }
+        vars[getVarId(systemConstantsTable[i].name)] = {0, setF(val)};
+    }
 }
 
 bool isLambdaDef(const char* p, String* params, bool* has_defaults, float* default_vals, int& param_cnt, int& consume_len) {

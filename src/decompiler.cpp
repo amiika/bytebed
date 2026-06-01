@@ -1,4 +1,5 @@
 #include "vm.h"
+#include "compiler.h"
 #include <string.h>
 #include <memory>
 
@@ -22,7 +23,6 @@ static String formatBinaryMask(float raw_val, int bit_count) {
 
 static String formatFloat(float v) {
     if (v == (int32_t)v) return String((int32_t)v);
-    // 32 bit float is about 7 digits ... so
     return String(v, 7);
 }
 
@@ -729,7 +729,8 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             }
         }
         
-        if (top_item == "t" || top_item == "PI" || top_item == "E" || top_item == "TAU" || top_item == "pi" || top_item == "tau" || top_item == "step") {
+        // TODO: Math symbols?
+        if (isReservedSymbol(top_item)) {
             looks_like_func = false;
         }
         
