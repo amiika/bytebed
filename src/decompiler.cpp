@@ -6,6 +6,26 @@ String decompileRPN();
 String decompileInfixRange(Instruction* prog, int start_pc, int end_pc);
 String decompileInfix();
 
+static String formatBinaryMask(float raw_val, int bit_count) {
+    int32_t val = (int32_t)raw_val;
+    String binStr = "";
+    if (val < 0) { 
+        binStr += "-"; 
+        val = -val; 
+    }
+    binStr += "0b";
+    for (int b = bit_count - 1; b >= 0; b--) {
+        binStr += ((val & (1U << b)) ? "1" : "0");
+    }
+    return binStr;
+}
+
+static String formatFloat(float v) {
+    if (v == (int32_t)v) return String((int32_t)v);
+    // 32 bit float is about 7 digits ... so
+    return String(v, 7);
+}
+
 /**
  * Decompiles the current program bank into either RPN or infix syntax.
  * @param to_rpn If true, decompiles to RPN; otherwise, to infix
@@ -75,15 +95,18 @@ String decompileRPN() {
 
         switch (inst.op) {
             case OP_VAL: {
-                float v = getF(inst.val);
-                if (pc + 1 < len && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
-                if (v == (int32_t)v) {
-                    out += String((int32_t)v) + " "; 
+                if (pc + 1 < len && prog[pc+1].op == OP_MASK_META) {
+                    out += formatBinaryMask(getF(inst.val), prog[pc+1].val) + " ";
+                    pc++; 
                 } else {
-                    out += String(v, 7) + " "; 
+                    float v = getF(inst.val);
+                    if (pc + 1 < len && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
+                    out += formatFloat(v) + " ";
                 }
                 break;
             }
+            case OP_MASK_META:
+                break;
             case OP_T: {
                 if (pc + 1 < len && prog[pc+1].op == OP_NEG) { out += "-t "; pc++; }
                 else { out += "t "; }
@@ -187,9 +210,7 @@ String decompileRPN() {
                     out += "( ";
                     for (int i = 0; i < param_cnt; i++) {
                         if (has_def[i]) {
-                            float v = def_val[i];
-                            if (v == (int32_t)v) out += String((int32_t)v) + " ";
-                            else out += String(v, 7) + " ";
+                            out += formatFloat(def_val[i]) + " ";
                         }
                         out += params[i] + " ";
                         if (has_def[i]) out += "= ";
@@ -297,15 +318,20 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
         
         if (inst.op == OP_VAL) {
             if (sp < MAX_STACK - 1) { 
-                float v = getF(inst.val);
-                if (pc + 1 < end_pc && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
-                if (v == (int32_t)v) {
-                    stack[++sp] = String((int32_t)v);
+                if (pc + 1 < end_pc && prog[pc+1].op == OP_MASK_META) {
+                    stack[++sp] = formatBinaryMask(getF(inst.val), prog[pc+1].val);
+                    prec_stack[sp] = PREC_MAX;
+                    pc++; 
                 } else {
-                    stack[++sp] = String(v, 7);
+                    float v = getF(inst.val);
+                    if (pc + 1 < end_pc && prog[pc+1].op == OP_NEG) { v = -v; pc++; }
+                    stack[++sp] = formatFloat(v);
+                    prec_stack[sp] = PREC_MAX; 
                 }
-                prec_stack[sp] = PREC_MAX; 
             }
+        }
+        else if (inst.op == OP_MASK_META) {
+            continue; 
         }
         else if (inst.op == OP_T) {
             if (sp < MAX_STACK - 1) { stack[++sp] = "t"; prec_stack[sp] = PREC_MAX; }
@@ -418,10 +444,7 @@ String decompileInfixRange(Instruction* prog, int start_pc, int end_pc) {
             for (int i = 0; i < param_cnt; i++) {
                 func_str += params[i];
                 if (has_def[i]) {
-                    func_str += "=";
-                    float v = def_val[i];
-                    if (v == (int32_t)v) func_str += String((int32_t)v);
-                    else func_str += String(v, 7);
+                    func_str += "=" + formatFloat(def_val[i]);
                 }
                 if (i < param_cnt - 1) func_str += ",";
             }
