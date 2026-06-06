@@ -31,7 +31,7 @@ FastI2S audioOut;
 // Native USB MIDI State
 USBMidiHandler midiHandler;
 bool usb_midi_enabled = false;
-float current_midi_freq = 440.0f;
+float current_midi_freq = REF::A4HZ;
 int current_midi_note = 0; 
 TaskHandle_t midiTaskHandle = NULL; 
 
@@ -79,14 +79,14 @@ void updateRuntimeVars() {
 
 void onNoteOn(uint8_t channel, uint8_t note, uint8_t velocity) {
     if (!usb_midi_enabled) return;
-    current_midi_freq = 440.0f * powf(2.0f, (float)(note - 69) / 12.0f);
+    current_midi_freq = REF::A4HZ * powf(2.0f, (float)(note - REF::A4) / 12.0f);
     float gate = (float)velocity / 127.0f;
     updateMIDIVars(current_midi_freq, gate, (float)note);
 }
 
 void onNoteOff(uint8_t channel, uint8_t note, uint8_t velocity) {
     if (!usb_midi_enabled) return;
-    float released_freq = 440.0f * powf(2.0f, (float)(note - 69) / 12.0f);
+    float released_freq = REF::A4HZ * powf(2.0f, (float)(note - REF::A4) / 12.0f);
     if (fabsf(current_midi_freq - released_freq) < 0.1f) {
         updateMIDIVars(current_midi_freq, 0.0f, (float)note);
     }
@@ -180,17 +180,14 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
         if (is_playing) {
             int mod = std::max(1, 1 << drawScale); 
             
-            // AUTOMATIC VM DOWNSAMPLING
             bool use_downsample = (current_sample_rate >= 44100);
             int virtual_block_size = use_downsample ? (AUDIO_BUF_SIZE / 2) : AUDIO_BUF_SIZE;
             float vm_t_step = use_downsample ? 2.0f : 1.0f;
             
-            // Safely execute VM with clean strided fractional stepping
             executeVmBlock((float)t_raw, vm_t_step, virtual_block_size, block_buf);
             
             int virtual_read_ptr = 0;
 
-            // HARDWARE INTERPOLATION & DISPATCH
             for(int i = 0; i < AUDIO_BUF_SIZE; i++) {
                 uint32_t raw_sample = 0;
                 
@@ -202,19 +199,22 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                         uint32_t packed = block_buf[virtual_read_ptr++];
                         
                         if (current_play_mode == MODE_BYTEBEAT) {
-                            current_frame_output = (float)((int16_t)(packed & 255) - 128) * 256.0f;
+                            current_frame_output = (float)((int16_t)(packed & 255) - (int16_t)REF::CTR) * REF::NORM;
+                        } else if (current_play_mode == MODE_SIGNED) {
+                            current_frame_output = (float)((int8_t)(packed & 255)) * REF::NORM;
                         } else {
-                            int32_t signed_32 = (int32_t)(packed - 2147483648U);
+                            int32_t signed_32 = (int32_t)(packed - 0x80000000U);
                             current_frame_output = (float)((int16_t)(signed_32 >> 16));
                         }
                     }
                     
-                    // Lean arithmetic: Step is 0.0f on even frames, 0.5f on odd frames.
                     float step_acc = (i & 1) ? 0.5f : 0.0f;
                     float blended_float = last_frame_output + (current_frame_output - last_frame_output) * step_acc;
                     
                     if (current_play_mode == MODE_BYTEBEAT) {
-                        raw_sample = (uint32_t)((int32_t)(blended_float / 256.0f) + 128) & 255;
+                        raw_sample = (uint32_t)((int32_t)(blended_float / REF::NORM) + (int32_t)REF::CTR) & 255;
+                    } else if (current_play_mode == MODE_SIGNED) {
+                        raw_sample = (uint32_t)((int8_t)(blended_float / REF::NORM)) & 255;
                     } else {
                         raw_sample = (uint32_t)((int16_t)blended_float) << 16;
                     }
@@ -225,7 +225,11 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                 
                 if (current_play_mode == MODE_BYTEBEAT) {
                     ui_sample = (uint8_t)(raw_sample & 255);
-                    raw_float = (float)((int16_t)(ui_sample - 128) << 8); 
+                    raw_float = (float)((int16_t)(ui_sample - (uint8_t)REF::CTR) << 8); 
+                } else if (current_play_mode == MODE_SIGNED) {
+                    int8_t signed_val = (int8_t)(raw_sample & 255);
+                    ui_sample = (uint8_t)(signed_val + 128); 
+                    raw_float = (float)(signed_val << 8);
                 } else {
                     int16_t signed_16 = (int16_t)(raw_sample >> 16); 
                     raw_float = (float)signed_16; 
@@ -247,7 +251,7 @@ void IRAM_ATTR playBytebeat(void *pvParameters) {
                     }
                 }
                 
-                t_raw++; // Universal hardware clock synchronization
+                t_raw++; 
                 
                 dc_block_out = raw_float - dc_block_in + 0.995f * dc_block_out;
                 dc_block_in = raw_float;
@@ -511,7 +515,7 @@ void uiTask(void *pvParameters) {
 
                     if (pending_confirm == CONF_BANK && (st.alt || st.opt)) cancel = true;
                     if (pending_confirm == CONF_LOAD_PATCH && (st.alt)) cancel = true;
-                    if (pending_confirm == CONF_SAVE_PATCH) cancel = false; // Overridden above by modifiers safely
+                    if (pending_confirm == CONF_SAVE_PATCH) cancel = false; 
                     
                     if (st.fn || st.shift || M5Cardputer.Keyboard.isKeyPressed(KEY_BACKSPACE) || M5Cardputer.Keyboard.isKeyPressed('`')) cancel = true;
                     if (cancel) {
@@ -630,11 +634,21 @@ void uiTask(void *pvParameters) {
                         updateRuntimeVars();
                     }
                     if (c == 'f' || c == 'F') {
-                        current_play_mode = (current_play_mode == MODE_BYTEBEAT) ? MODE_FLOATBEAT : MODE_BYTEBEAT;
+                        if (current_play_mode == MODE_BYTEBEAT) {
+                            current_play_mode = MODE_SIGNED;
+                            status_msg = "MODE: SIGNED";
+                        } else if (current_play_mode == MODE_SIGNED) {
+                            current_play_mode = MODE_FLOATBEAT;
+                            status_msg = "MODE: FLOATBEAT";
+                        } else {
+                            current_play_mode = MODE_BYTEBEAT;
+                            status_msg = "MODE: BYTEBEAT";
+                        }
+                        
                         var_count = 0; memset(vars, 0, sizeof(vars)); clearGlobalArray(); 
                         updateRuntimeVars();
                         bool valid = rpn_mode ? compileRPN(input_buffer) : compileInfix(input_buffer, false);
-                        status_msg = (current_play_mode == MODE_BYTEBEAT) ? "MODE: BYTEBEAT" : "MODE: FLOATBEAT"; status_timer = millis() + 1500;
+                        status_timer = millis() + 1500;
                     }
                     if (c == '1') { current_vis = VIS_WAV_WIRE; bg_sprite.fillScreen(theme.bg); }
                     if (c == '2') { current_vis = VIS_DIA_AMP;  bg_sprite.fillScreen(theme.bg); }

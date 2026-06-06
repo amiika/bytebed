@@ -2,6 +2,15 @@ let wasm, inputPtr, audioCtx;
 let workletNode = null;
 let is_playing = false, is_rpn = false, is_auto = true;
 
+const REF = {
+    A4HZ: 440.0,
+    A4: 69.0,
+    CENTER: 128,
+    NORM: 256,
+    UAMP: 127.5,
+    NFLOAT: 2147483647.5
+};
+
 let t_audio = 0; 
 let t_viz = 0;   
 let t_frac = 0;
@@ -9,15 +18,14 @@ let mv = 0.0;
 let lastX = 0, lastY = 0;
 let has_moved = false;
 let targetSampleRate = 8000;
-let isFloatbeat = false;
+let currentPlayMode = 0; // 0: BYTEBEAT, 1: FLOATBEAT, 2: SIGNED
 const rates = [8000, 11025, 22050, 32000, 44100, 48000];
 let currentRateIdx = 0;
 
 let current_midi_note = 0;
-let current_midi_freq = 440.0;
+let current_midi_freq = REF.A4HZ;
 
 let midiInputs = [];
-// Load persisted states immediately
 let currentMidiPortIdx = parseInt(localStorage.getItem('bytebed_midi_port')) || -2; 
 let currentMidiChannel = parseInt(localStorage.getItem('bytebed_midi_chan')) || -1; 
 
@@ -37,21 +45,10 @@ const midiChanBtn = document.getElementById('midi-chan-btn');
 const bankBtn = document.getElementById('bank-btn');
 const patchBtn = document.getElementById('patch-btn');
 
-/**
- * Computes a proper mathematical modulo supporting negative numbers.
- * @param a The dividend
- * @param b The divisor
- * @return The positive remainder
- */
 function mod(a, b) {
     return ((a % b) + b) % b;
 }
 
-/**
- * Encodes a string into a URL-safe Base64 format.
- * @param str The raw UTF-8 string input
- * @return The URL-safe Base64 encoded string
- */
 function base64UrlEncode(str) {
     const utf8Bytes = new TextEncoder().encode(str);
     let binaryStr = "";
@@ -332,7 +329,7 @@ class BytebeatWorklet extends AudioWorkletProcessor {
         this.t_frac = 0;
         this.targetSampleRate = 8000;
         this.is_playing = false;
-        this.is_floatbeat = false;
+        this.play_mode = 0;
 
         this.current_val = 0;
         this.next_val = 0;
@@ -361,11 +358,11 @@ class BytebeatWorklet extends AudioWorkletProcessor {
                 if (!this.is_playing) this.has_init = false;
             } else if (msg.type === 'rate') {
                 this.targetSampleRate = msg.rate;
-                this.has_init = false; // Flush interpolation cache
+                this.has_init = false; 
                 if (this.wasm && this.wasm.wasm_set_sample_rate) this.wasm.wasm_set_sample_rate(msg.rate);
             } else if (msg.type === 'mode') {
-                this.is_floatbeat = (msg.mode === 1);
-                this.has_init = false; // Flush interpolation cache
+                this.play_mode = msg.mode;
+                this.has_init = false; 
                 if (this.wasm && this.wasm.wasm_set_play_mode) this.wasm.wasm_set_play_mode(msg.mode);
                 if (this.wasm && this.wasm.wasm_reset_vm) this.wasm.wasm_reset_vm();
             } else if (msg.type === 'reset') {
@@ -387,9 +384,13 @@ class BytebeatWorklet extends AudioWorkletProcessor {
     // Nasty fix to extract clean float format from WASM binary return
     get_wasm_float(t) {
         let sample = this.wasm.wasm_execute(t);
-        if (this.is_floatbeat) {
+        if (this.play_mode === 1) { 
             return ((sample >>> 0) / 2147483647.5) - 1.0;
-        } else {
+        } else if (this.play_mode === 2) {
+            let val = sample & 255;
+            if (val > 127) val -= 256;
+            return val / 128.0; 
+        } else { 
             return ((sample & 255) - 128) / 128.0; 
         }
     }
@@ -539,11 +540,11 @@ async function loadPreset() {
     const rate = wasm.wasm_get_preset_rate(currentBank, currentPatch);
     const mode = wasm.wasm_get_preset_mode(currentBank, currentPatch);
 
-    isFloatbeat = (mode === 1);
+    currentPlayMode = mode;
     
     const formatBtn = document.getElementById('format-btn');
     if (formatBtn) {
-        formatBtn.innerText = isFloatbeat ? "FLOATBEAT" : "BYTEBEAT";
+        formatBtn.innerText = currentPlayMode === 0 ? "BYTEBEAT" : currentPlayMode === 1 ? "FLOATBEAT" : "SIGNED";
     }
 
     targetSampleRate = rate;
@@ -639,15 +640,15 @@ window.cycleRate = function(e) {
  */
 window.toggleFormat = function(e) {
     if(e) e.stopPropagation();
-    isFloatbeat = !isFloatbeat;
-    e.target.innerText = isFloatbeat ? "FLOATBEAT" : "BYTEBEAT";
+    currentPlayMode = (currentPlayMode + 1) % 3;
+    e.target.innerText = currentPlayMode === 0 ? "BYTEBEAT" : currentPlayMode === 1 ? "FLOATBEAT" : "SIGNED";
     
     if (wasm) {
-        if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+        if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(currentPlayMode);
         if (wasm.wasm_reset_vm) wasm.wasm_reset_vm(); 
         
         if (workletNode) {
-            workletNode.port.postMessage({ type: 'mode', mode: isFloatbeat ? 1 : 0 });
+            workletNode.port.postMessage({ type: 'mode', mode: currentPlayMode });
         }
         compile(formulaInput.value);
     }
@@ -712,7 +713,7 @@ function shareCode(e) {
     if(e) e.stopPropagation();
     const safeBase64 = base64UrlEncode(formulaInput.value);
     const mode = is_rpn ? 'r' : 'i';
-    const fmt = isFloatbeat ? 'f' : 'b';
+    const fmt = currentPlayMode === 1 ? 'f' : (currentPlayMode === 2 ? 's' : 'b');
     const url = `${window.location.origin}${window.location.pathname}?m=${mode}&fmt=${fmt}&sr=${targetSampleRate}&code=${safeBase64}`;
     
     navigator.clipboard.writeText(url).then(() => {
@@ -742,13 +743,18 @@ function checkURLParams() {
             modeBtn.innerText = is_rpn ? "STACK" : "INFIX";
             
             if (fmt === 'f') {
-                isFloatbeat = true;
-                document.getElementById('format-btn').innerText = "FLOATBEAT";
-                document.getElementById('format-btn').classList.remove('active');
-            } else if (fmt === 'b') {
-                isFloatbeat = false;
-                document.getElementById('format-btn').innerText = "BYTEBEAT";
-                document.getElementById('format-btn').classList.add('active');
+                currentPlayMode = 1;
+            } else if (fmt === 's') {
+                currentPlayMode = 2;
+            } else {
+                currentPlayMode = 0;
+            }
+
+            const formatBtn = document.getElementById('format-btn');
+            if (formatBtn) {
+                formatBtn.innerText = currentPlayMode === 0 ? "BYTEBEAT" : currentPlayMode === 1 ? "FLOATBEAT" : "SIGNED";
+                if (currentPlayMode === 0) formatBtn.classList.add('active');
+                else formatBtn.classList.remove('active');
             }
             
             if (sr) {
@@ -762,7 +768,7 @@ function checkURLParams() {
             }
             
             if (wasm) {
-                if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+                if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(currentPlayMode);
                 if (wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(targetSampleRate);
                 if (wasm.wasm_reset_vm) wasm.wasm_reset_vm();
             }
@@ -895,7 +901,7 @@ let wasmReadyPromise = (async function initWASM() {
         inputPtr = wasm.get_input_buffer();
         
         if (wasm.wasm_set_sample_rate) wasm.wasm_set_sample_rate(targetSampleRate);
-        if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(isFloatbeat ? 1 : 0);
+        if (wasm.wasm_set_play_mode) wasm.wasm_set_play_mode(currentPlayMode);
 
         scope.canvasElem = canvasElem;
         scope.canvasCtx = ctx;
@@ -965,7 +971,7 @@ async function bootAudio() {
         workletNode.port.postMessage({ type: 'init', wasmBytes: wasmBytesGlobal, sampleRate: targetSampleRate });
     });
 
-    workletNode.port.postMessage({ type: 'mode', mode: isFloatbeat ? 1 : 0 });
+    workletNode.port.postMessage({ type: 'mode', mode: currentPlayMode });
 
     compile(formulaInput.value);
 
@@ -1091,12 +1097,15 @@ function renderLoop() {
         let raw_val = wasm.wasm_execute(t);
         let ui_sample = 0;
         
-        if (isFloatbeat) {
+        if (currentPlayMode === 1) {
             let unsignedVal = raw_val >>> 0;
-            let norm_float = (unsignedVal / 2147483647.5) - 1.0;
-            ui_sample = Math.floor((norm_float + 1.0) * 127.5);
+            let norm_float = (unsignedVal / REF.NFLOAT) - 1.0;
+            ui_sample = Math.floor((norm_float + 1.0) * REF.UAMP);
+        } else if (currentPlayMode === 2) {
+            let val = raw_val & 255;
+            if (val > 127) val -= 256;
+            ui_sample = val + REF.CENTER;
         } else {
-            // Mask and clamp legacy 8-bit Bytebeat directly
             ui_sample = raw_val & 255;
         }
         
@@ -1138,7 +1147,7 @@ function refreshMidiInputs(midiAccess) {
  * @param note The absolute target standard MIDI note number
  */
 function handleNoteOff(note) {
-    const released_freq = 440.0 * Math.pow(2.0, (note - 69) / 12.0);
+    const released_freq = REF.A4HZ * Math.pow(2.0, (note - REF.A4) / 12.0);
     if (Math.abs(current_midi_freq - released_freq) < 0.1) {
         if (wasm && wasm.wasm_set_midi) wasm.wasm_set_midi(current_midi_freq, 0.0, note);
         if (workletNode) workletNode.port.postMessage({ type: 'midi', freq: current_midi_freq, gate: 0.0, note: note });
@@ -1173,7 +1182,7 @@ function onMIDIMessage(message) {
     if (command === 144) { 
         if (velocity > 0) {
             current_midi_note = note;
-            current_midi_freq = 440.0 * Math.pow(2.0, (note - 69) / 12.0);
+            current_midi_freq = REF.A4HZ * Math.pow(2.0, (note - REF.A4) / 12.0);
             const gate = velocity / 127.0;
             
             if (wasm && wasm.wasm_set_midi) wasm.wasm_set_midi(current_midi_freq, gate, note);

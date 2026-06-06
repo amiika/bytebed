@@ -2,6 +2,8 @@
 #include "fast_math.h"
 #include <algorithm>
 
+using namespace REF;
+
 /**
  * @struct MathFunc
  * Describes a built-in mathematical function or shorthand operator mapping.
@@ -67,7 +69,7 @@ int string_table_count = 0;
 float* global_array_mem = nullptr;
 int32_t global_array_capacity = 0;
 
-float anchor_bpm = 120.0f;
+float anchor_bpm = BPM;
 float anchor_beat = 0.0f;
 int32_t anchor_t = 0;
 int anchor_sample_rate = 8000;
@@ -278,8 +280,7 @@ static float calculatePitch(float deg, float mask_f, float root_deg, float edo, 
     float semitone2 = (float)scale_bits[local_deg2] + (octaves2 * edo) + (oct * edo);
     
     float interpolated_semitone = semitone1 + (fraction * (semitone2 - semitone1));
-    constexpr float BASELINE_MIDI_NOTE = 60.0f;
-    return base_hz * powf(2.0f, (interpolated_semitone + (BASELINE_MIDI_NOTE - 69.0f)) / edo);
+    return base_hz * powf(2.0f, (interpolated_semitone + (C4 - A4)) / edo);
 }
 
 String getOpSym(OpCode op) {
@@ -454,10 +455,34 @@ static inline void popFloatArgs(int args, int max_args, float* out_p, Val& tos, 
     }
 }
 
+static inline float calcStepsPerBeat(float steps_f, float sign_f, float beats_f) {
+    float global_steps = steps_f > 0.01f ? steps_f : REF::STEPS;
+    float global_beats = 4.0f;
+    if (sign_f > 0.01f) global_beats = sign_f * 4.0f;
+    else if (beats_f > 0.01f) global_beats = beats_f;
+    float spb = global_steps / global_beats;
+    return spb <= 0.0f ? 4.0f : spb;
+}
+
+static inline float polyBlep(float p, float dt) {
+    if (dt <= 0.0f) return 0.0f;
+    if (p < dt) {
+        float t = p / dt;
+        return -(1.0f - t) * (1.0f - t);
+    } else if (p > 1.0f - dt) {
+        float t = (1.0f - p) / dt;
+        return (1.0f - t) * (1.0f - t);
+    }
+    return 0.0f;
+}
+
 void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t* out_buf) {
     uint8_t bank = active_bank; 
     int len = prog_len_bank[bank];
-    bool is_bb = (current_play_mode == MODE_BYTEBEAT);
+    bool is_unsigned_bb = (current_play_mode == MODE_BYTEBEAT);
+    bool is_signed_bb   = (current_play_mode == MODE_SIGNED);
+    bool is_any_bb      = is_unsigned_bb || is_signed_bb;
+    
     if (len == 0) { memset(out_buf, 128, length * sizeof(uint32_t)); return; }
 
     static const void* dispatch_table[] = {
@@ -503,7 +528,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
     if (vars[i_steps].f == 0.0f) {
         vars[i_steps].type = 0;
-        vars[i_steps].f = 16.0f; 
+        vars[i_steps].f = REF::STEPS; 
     }
 
     for (int sample_idx = 0; sample_idx < length; sample_idx++) {
@@ -529,15 +554,13 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
         float current_beat = anchor_beat + (t - anchor_t) * (vars[i_bpm].f / (60.0f * current_sample_rate));
         
-        float global_beats = 4.0f;
-        if (vars[i_sign].f > 0.0f) global_beats = vars[i_sign].f * 4.0f;
-        else if (vars[i_beats].f > 0.0f) global_beats = vars[i_beats].f;
+        float global_beats = (vars[i_sign].f > 0.01f) ? vars[i_sign].f * 4.0f : ((vars[i_beats].f > 0.01f) ? vars[i_beats].f : 4.0f);
+        float steps_per_bar = vars[i_steps].f > 0.01f ? vars[i_steps].f : REF::STEPS;
         
-        float steps_per_bar = vars[i_steps].f;
-        if (steps_per_bar <= 0.01f) steps_per_bar = 16.0f; 
+        float steps_per_beat = steps_per_bar / global_beats;
+        if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
 
         float current_bar = current_beat / global_beats;
-
         float local_beat = current_beat;
         float local_bar  = current_bar;
         
@@ -548,9 +571,6 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             if (local_beat < 0.0f) local_beat += total_loop_beats;
             local_bar = local_beat / global_beats;
         }
-
-        float steps_per_beat = steps_per_bar / global_beats;
-        if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
 
         vars[i_beat].type = 0; vars[i_beat].f = local_beat;
         vars[i_bar].type  = 0; vars[i_bar].f  = local_bar;
@@ -680,9 +700,33 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
         L_OP_NOT: { setVal(tos, (asF(tos) == 0.0f) ? 1.0f : 0.0f); BOING(); }
         L_OP_BNOT: { setVal(tos, (float)(~(int32_t)asF(tos))); BOING(); }
         
-        L_OP_SIN: { float v = asF(tos); setVal(tos, is_bb ? 128.0f + fast_sin(v * 0.02454369f) * 127.0f : fast_sin(v)); BOING(); }
-        L_OP_COS: { float v = asF(tos); setVal(tos, is_bb ? 128.0f + fast_sin(v * 0.02454369f + 1.570796f) * 127.0f : fast_sin(v + 1.570796f)); BOING(); }
-        L_OP_TAN: { float v = asF(tos); setVal(tos, is_bb ? 128.0f + sanitize(tanf(v * 0.02454369f)) * 127.0f : sanitize(tanf(v))); BOING(); }
+        L_OP_SIN: { 
+            float v = asF(tos); 
+            if (current_play_mode == MODE_BYTEBEAT) {
+                setVal(tos, REF::CTR + fast_sin(v * REF::PI128) * REF::AMP);
+            } else {
+                setVal(tos, fast_sin(v)); 
+            }
+            BOING(); 
+        }
+        L_OP_COS: { 
+            float v = asF(tos); 
+            if (current_play_mode == MODE_BYTEBEAT) {
+                setVal(tos, REF::CTR + fast_sin(v * REF::PI128 + REF::PIH) * REF::AMP);
+            } else {
+                setVal(tos, fast_sin(v + REF::PIH)); 
+            }
+            BOING(); 
+        }
+        L_OP_TAN: { 
+            float v = asF(tos); 
+            if (current_play_mode == MODE_BYTEBEAT) {
+                setVal(tos, REF::CTR + sanitize(tanf(v * REF::PI128)) * REF::AMP);
+            } else {
+                setVal(tos, sanitize(tanf(v))); 
+            }
+            BOING(); 
+        }
         
         L_OP_SQRT:  { float v = asF(tos); setVal(tos, sanitize(v >= 0.0f ? sqrtf(v) : 0.0f)); BOING(); }
         L_OP_LOG:   { float v = asF(tos); setVal(tos, sanitize(v > 0.0f ? logf(v) : 0.0f)); BOING(); }
@@ -776,12 +820,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             }
 
             float absolute_beat = vars[i_beat].f;
-            float global_steps = vars[i_steps].f > 0.0f ? vars[i_steps].f : 16.0f;
-            float global_beats = 4.0f;
-            if (vars[i_sign].f > 0.0f) global_beats = vars[i_sign].f * 4.0f;
-            else if (vars[i_beats].f > 0.0f) global_beats = vars[i_beats].f;
-            float steps_per_beat = global_steps / global_beats;
-            if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
+            float steps_per_beat = calcStepsPerBeat(vars[i_steps].f, vars[i_sign].f, vars[i_beats].f);
 
             float total_dur = 0.0f;
             int sz = 0; bool is_global = false; int off = 0;
@@ -968,7 +1007,8 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             if (out_val < 0.0f) out_val = 0.0f;
             if (out_val > 1.0f) out_val = 1.0f;
 
-            setVal(tos, is_bb ? out_val * 256.0f : out_val);
+            if (current_play_mode == MODE_BYTEBEAT) setVal(tos, out_val * REF::NORM);
+            else setVal(tos, out_val);
             BOING();
         }
 
@@ -1044,50 +1084,26 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             int t_int = (int)type;
 
             if (t_int == 0) {
-                out = fast_sin(p * 6.2831853f);
+                out = fast_sin(p * REF::PI2);
             } 
             else if (t_int == 1) {
                 out = 1.0f - (p * 2.0f); 
-                
-                if (dt > 0.0f) {
-                    if (p < dt) {
-                        float t_pb = p / dt;
-                        out -= (1.0f - t_pb) * (1.0f - t_pb);
-                    } else if (p > 1.0f - dt) {
-                        float t_pb = (1.0f - p) / dt;
-                        out += (1.0f - t_pb) * (1.0f - t_pb);
-                    }
-                }
+                out += polyBlep(p, dt);
             } 
             else if (t_int == 2) {
                 out = (p < 0.5f) ? 1.0f : -1.0f;
+                out += polyBlep(p, dt);
                 
-                if (dt > 0.0f) {
-                    if (p < dt) {
-                        float t_pb = p / dt;
-                        out -= (1.0f - t_pb) * (1.0f - t_pb);
-                    } else if (p > 1.0f - dt) {
-                        float t_pb = (1.0f - p) / dt;
-                        out += (1.0f - t_pb) * (1.0f - t_pb);
-                    }
-                    
-                    float p2 = p + 0.5f;
-                    if (p2 >= 1.0f) p2 -= 1.0f;
-                    
-                    if (p2 < dt) {
-                        float t_pb = p2 / dt;
-                        out += (1.0f - t_pb) * (1.0f - t_pb);
-                    } else if (p2 > 1.0f - dt) {
-                        float t_pb = (1.0f - p2) / dt;
-                        out -= (1.0f - t_pb) * (1.0f - t_pb);
-                    }
-                }
+                float p2 = p + 0.5f;
+                if (p2 >= 1.0f) p2 -= 1.0f;
+                out -= polyBlep(p2, dt);
             } 
             else if (t_int == 3) {
-                out = fast_sin(p * 6.2831853f + 1.570796f);
+                out = fast_sin(p * REF::PI2 + REF::PIH);
             }
 
-            setVal(tos, is_bb ? (out + 1.0f) * 127.5f : out);
+            if (current_play_mode == MODE_BYTEBEAT) setVal(tos, (out + 1.0f) * REF::UAMP);
+            else setVal(tos, out);
             BOING();
         }
 
@@ -1095,7 +1111,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             int args = (dynamic_arity != -1) ? dynamic_arity : 6;
             dynamic_arity = -1;
             
-            float p[6] = {0.0f, 2741.0f, 0.0f, 12.0f, 440.0f, 0.0f}; 
+            float p[6] = {0.0f, 2741.0f, 0.0f, 12.0f, REF::A4HZ, 0.0f}; 
             popFloatArgs(args, 6, p, tos, vm_stack, sp);
             
             setVal(tos, calculatePitch(p[0], p[1], p[2], p[3], p[4], p[5]));
@@ -1106,7 +1122,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             int args = (dynamic_arity != -1) ? dynamic_arity : 2;
             dynamic_arity = -1;
             
-            float dynamic_steps = vars[i_steps].f > 0.01f ? vars[i_steps].f : 16.0f;
+            float dynamic_steps = vars[i_steps].f > 0.01f ? vars[i_steps].f : REF::STEPS;
             float p[3] = {0.0f, dynamic_steps, 0.0f}; 
             popFloatArgs(args, 3, p, tos, vm_stack, sp);
             
@@ -1169,13 +1185,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
                 target_slot = manual_step % md.n_steps;
             } else {
                 float absolute_beat = vars[i_beat].f;
-                float global_steps = vars[i_steps].f > 0.0f ? vars[i_steps].f : 16.0f;
-                float global_beats = 4.0f;
-                if (vars[i_sign].f > 0.0f) global_beats = vars[i_sign].f * 4.0f;
-                else if (vars[i_beats].f > 0.0f) global_beats = vars[i_beats].f;
-
-                float steps_per_beat = global_steps / global_beats;
-                if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
+                float steps_per_beat = calcStepsPerBeat(vars[i_steps].f, vars[i_sign].f, vars[i_beats].f);
 
                 float continuous_step = absolute_beat * steps_per_beat;
                 target_slot = ((int)floorf(continuous_step)) % md.n_steps;
@@ -1221,20 +1231,25 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             int args = (dynamic_arity != -1) ? dynamic_arity : 6;
             dynamic_arity = -1;
             
-            float p[6] = {0.0f, 2741.0f, 0.0f, 12.0f, 440.0f, 0.0f}; 
+            float p[6] = {0.0f, 2741.0f, 0.0f, 12.0f, REF::A4HZ, 0.0f}; 
             popFloatArgs(args, 6, p, tos, vm_stack, sp);
             
             float freq = calculatePitch(p[0], p[1], p[2], p[3], p[4], p[5]);
             float stride_scaler = (current_sample_rate >= 44100) ? 0.5f : 1.0f;
 
-            if (is_bb) {
-                float phase_step = (freq * 256.0f) / (float)current_sample_rate;
-                setVal(tos, (float)((int32_t)(t * phase_step * stride_scaler) & 255));
+            if (current_play_mode == MODE_BYTEBEAT) {
+                float phase_step = (freq * REF::NORM) / (float)current_sample_rate;
+                int32_t raw_p = (int32_t)(t * phase_step * stride_scaler) & 255;
+                setVal(tos, (float)raw_p);
+            } else if (current_play_mode == MODE_SIGNED) {
+                float phase_step = (freq * REF::NORM) / (float)current_sample_rate;
+                int32_t raw_p = (int32_t)(t * phase_step * stride_scaler) & 255;
+                setVal(tos, (float)((int8_t)raw_p));
             } else {
-                float phase_step = (freq * 6.2831853f) / (float)current_sample_rate;
+                float phase_step = (freq * REF::PI2) / (float)current_sample_rate;
                 float total_angle = t * phase_step * stride_scaler;
-                float wrapped_angle = total_angle - (floorf(total_angle / 6.2831853f) * 6.2831853f);
-                if (wrapped_angle < 0.0f) wrapped_angle += 6.2831853f;
+                float wrapped_angle = total_angle - (floorf(total_angle / REF::PI2) * REF::PI2);
+                if (wrapped_angle < 0.0f) wrapped_angle += REF::PI2;
                 setVal(tos, wrapped_angle);
             }
             BOING();
@@ -1257,14 +1272,7 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             }
 
             float absolute_beat = (args == 3) ? md.extra[0] : vars[i_beat].f;
-            float master_steps = vars[i_steps].f > 0.0f ? vars[i_steps].f : 16.0f;
-            
-            float global_beats = 4.0f;
-            if (vars[i_sign].f > 0.0f) global_beats = vars[i_sign].f * 4.0f;
-            else if (vars[i_beats].f > 0.0f) global_beats = vars[i_beats].f;
-
-            float steps_per_beat = master_steps / global_beats;
-            if (steps_per_beat <= 0.0f) steps_per_beat = 4.0f;
+            float steps_per_beat = calcStepsPerBeat(vars[i_steps].f, vars[i_sign].f, vars[i_beats].f);
 
             float continuous_step = absolute_beat * steps_per_beat;
 
@@ -1307,22 +1315,25 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
 
         L_END:
 
+        float out = 0.0f;
         if (tos.type == 1) { 
             out_buf[sample_idx] = (uint32_t)tos.v; 
             continue; 
-        }
-
-        float out = 0.0f;
-        if (tos.type == 2 || tos.type == 3) {
+        } else if (tos.type == 2 || tos.type == 3) {
             int32_t meta = tos.v; 
             int off = meta >> 16;
             int sz = meta & 0xFFFF;
             if (tos.type == 2 && sz >= 2) {
                 float L = off < MAX_LOCAL_ARRAY ? local_array_mem[off] : 0.0f;
                 float R = off + 1 < MAX_LOCAL_ARRAY ? local_array_mem[off + 1] : 0.0f;
-                if (is_bb) { 
-                    out_buf[sample_idx] = (uint32_t)((((int32_t)L & 255) + ((int32_t)R & 255)) >> 1); 
+                if (current_play_mode == MODE_BYTEBEAT) { 
+                    out_buf[sample_idx] = (uint32_t)((((int32_t)sanitize(L) & 255) + ((int32_t)sanitize(R) & 255)) >> 1); 
                     continue; 
+                } else if (current_play_mode == MODE_SIGNED) {
+                    int8_t sL = (int8_t)((int32_t)sanitize(L) & 255);
+                    int8_t sR = (int8_t)((int32_t)sanitize(R) & 255);
+                    out_buf[sample_idx] = (uint32_t)(uint8_t)(((int32_t)sL + (int32_t)sR) >> 1);
+                    continue;
                 } else {
                     out = (L + R) * 0.5f;
                 }
@@ -1335,21 +1346,18 @@ void IRAM_ATTR executeVmBlock(float start_t, float t_step, int length, uint32_t*
             out = tos.f; 
         }
 
-        if (!is_bb) {
+        if (!is_any_bb) {
             out = sanitize(out);
-
             if (out > 8.0f || out < -8.0f) {
-                float fraction = out - (float)((int32_t)out);
+                float fraction = out - floorf(out);
                 out = (fraction * 2.0f) - 1.0f; 
             } 
-
             if (out > 1.0f) out = 1.0f;
             if (out < -1.0f) out = -1.0f;
-            
             int32_t signed_pcm = (int32_t)(out * (float)INT32_MAX);
             out_buf[sample_idx] = (uint32_t)signed_pcm ^ 0x80000000;
         } else if (tos.type != 2 && tos.type != 3) {
-            out_buf[sample_idx] = (uint32_t)((int32_t)sanitize(out) & 255); 
+            out_buf[sample_idx] = (uint32_t)((int32_t)sanitize(out) & 255);
         }
     }
 #undef BOING

@@ -17,13 +17,29 @@
 #define UI_REFRESH_MS       33
 #define UNDO_DEPTH          20
 
+namespace REF {
+    constexpr float PI2 = 6.28318530718f;
+    constexpr float PIH = 1.57079632679f;
+    constexpr float PI128 = 0.0245436926f;
+    constexpr float CTR = 128.0f;
+    constexpr float AMP = 127.0f;
+    constexpr float UAMP = 127.5f;
+    constexpr float NORM = 256.0f;
+    constexpr float A4HZ = 440.0f;
+    constexpr float A4 = 69.0f;
+    constexpr float C4 = 60.0f;
+    constexpr float STEPS = 16.0f;
+    constexpr float BPM = 120.0f;
+}
+
 enum VisMode { 
     VIS_WAV_WIRE, VIS_DIA_AMP, VIS_DIA_BIT, VIS_WAV_ORIG, VIS_HISTORY 
 };
 
 enum PlayMode { 
     MODE_BYTEBEAT, 
-    MODE_FLOATBEAT 
+    MODE_FLOATBEAT,
+    MODE_SIGNED
 };
 
 enum OpCode : uint8_t { 
