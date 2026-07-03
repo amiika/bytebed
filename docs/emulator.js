@@ -45,10 +45,21 @@ const midiChanBtn = document.getElementById('midi-chan-btn');
 const bankBtn = document.getElementById('bank-btn');
 const patchBtn = document.getElementById('patch-btn');
 
+/**
+ * Computes a proper mathematical modulo supporting negative numbers.
+ * @param a The dividend
+ * @param b The divisor
+ * @return The positive remainder
+ */
 function mod(a, b) {
     return ((a % b) + b) % b;
 }
 
+/**
+ * Encodes a string into a URL-safe Base64 format.
+ * @param str The raw UTF-8 string input
+ * @return The URL-safe Base64 encoded string
+ */
 function base64UrlEncode(str) {
     const utf8Bytes = new TextEncoder().encode(str);
     let binaryStr = "";
