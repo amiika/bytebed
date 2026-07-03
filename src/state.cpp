@@ -52,18 +52,18 @@ const PresetConfig defaultBanks[10][10] = {
         {"t*(t>>11&t>>8&123&t>>3)", 8000, MODE_BYTEBEAT},
         {"t*21/4*[0,1,4/3,6/5,8/9]['10101010110010101010101011001010202020202200202030303030330030401010101011001010101010101100102010101010110010101010101011001033'[t/417]]", 8000, MODE_BYTEBEAT} 
     },
-    // BANK 2: TESTS (8kHz Bytebeat)
+    // BANK 2: TESTS (Bytebeat and Signed bytebeat)
     {
         {"g=(n)=>{n<1?1:n%2<1?g(n/2):2*g(n/2)}; g(t>>7)*(t&128|t>>4)", 8000, MODE_BYTEBEAT}, 
         {"tm=(n)=>{n<1?0:n%2<1?tm(n/2):1-tm(n/2)}; t*tm(t>>11)*(t>>5&7)", 8000, MODE_BYTEBEAT},
         {"pat=(s,o,r)=>(c=s[t>>r],c?30&t*2**((c-1)/12-o):0),3*pat('10100030305006008034660000gfbx',2,10)+5*(t&4096?pat('148',0,8)*(4096-(t&4095))>>12:0)", 8000, MODE_BYTEBEAT},
-        {"ev=(t>>12)%4; ev<1?t*3:ev<2?t*5:ev<3?t*6:t*9", 8000, MODE_BYTEBEAT},
         {"f=(x,dt)=>{x*(t>>dt)};f(t,5)+f(t,7)", 8000, MODE_BYTEBEAT},
         {"v=t>>3,v^=t>>(t>>8),(v&3)?t>>5:t&(t>>4)", 22050, MODE_BYTEBEAT},
-        {"a=t*2**([1,2,3][t>>22&3]/4),b=t*2**([1,2,3][t>>11&63]/12+2),(3*a^t>>6&256/'1112'[t>>14&3]-1|a)%256*2/3+(b^b*2)%256/3", 8000, MODE_BYTEBEAT},                                               
-        {"a=[1,2,3][(t>>10)%4]*[2,4,5,6][(t>>16)%4]*t,b=a%32+t>>a,c=b%t+a,[(t>>a)+b,c]", 32000, MODE_BYTEBEAT},                                  
+        {"a=t*2**([1,2,3][t>>22&3]/4),b=t*2**([1,2,3][t>>11&63]/12+2),(3*a^t>>6&256/'1112'[t>>14&3]-1|a)%256*2/3+(b^b*2)%256/3", 8000, MODE_BYTEBEAT},                                                                     
         {"t*(4|t>>13&3)>>(~t>>11&1)&128|t*(t>>11&t>>13)*(~t>>9&3)&127", 8000, MODE_BYTEBEAT}, 
-        {"t*((t>>12|t>>8)&63&t>>4)", 8000, MODE_BYTEBEAT},   
+        {"t*((t>>12|t>>8)&63&t>>4)", 8000, MODE_BYTEBEAT},
+        {"64*s(t*0.05+4*s(t*0.001))*s(0.15*t)", 8000, MODE_SIGNED},
+        {"40*(s(t*0.04+50000*s(t*0.0001)*s(t*0.0005))+s(t*0.5+40*s(t*0.05)*s(t*0.0001))+s(t*0.05+150*s(t*0.0025)*s(t*0.004)))", 8000, MODE_SIGNED},  
     },
     // BANK 3: FLOATBEAT (48kHz Floatbeat)
     {
@@ -90,12 +90,12 @@ const PresetConfig defaultBanks[10][10] = {
         {"[20.0, 10.0, 5.0, 2.5].reduce((a, v) => s(t * v * 0.001 + a * 2.0))", 48000, MODE_FLOATBEAT}, 
         {"[1,3,5,7].reduce((a,v)=>max(a,s(t*v*0.0015)/v))", 48000, MODE_FLOATBEAT},                                         
         {"c=[1.0,1.2,1.5,1.8],o=1+(floor(t/16000)%2),f=c.map(x=>x*100*o),f.sum(n=>s(t *n*0.005))/4*exp(-(t%1000)/500)", 48000, MODE_FLOATBEAT},                                               
-        {"t/=48E3,v=t*2**7.5,y=a=>32-v/a%32,i=y(u)/.6,u=r=>r%256/128,f=s(16*cbrt(64*v%4096)),z=v*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.3,6,4.8,5.4,2.7,1.4,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][v>>5]*1.5*pi,s(z+s(z)*atan(s(z/4))*1.1**y(1))/2*y(1)/32+[f,i,f,i,f,i,f,f][v>>5]/2", 48000, MODE_FLOATBEAT}, 
+        {"t/=48E3,v=t*2**7.5,y=a=>32-v/a%32,i=r(),u=q=>q%256/128,f=s(16*cbrt(64*v%4096)),z=v*[1,4,4.8,5.4,6,2,1,2,1,4,4.8,5.4,6,6.3,6,4.8,5.4,2.7,1.4,2.7,4.8,3,6,4,1,2,1,2,1,2,1,2][v>>5]*1.5*pi,s(z+s(z)*atan(s(z/4))*1.1**y(1))/2*y(1)/32+[f,i,f,i,f,i,f,f][v>>5]/2", 48000, MODE_FLOATBEAT}, 
     },
     
     // BANK 5: ACCELEROMETER & GYROSCOPE & MOUSE
     {
-        {"g=gx*gx+gy*gy+gz*gz,o+=(g-o)*.005,((t*10883>>7)*(t>>5)|t>>15)*o", 8000, MODE_BYTEBEAT}, 
+        {"(t * ((t >> 9 & 15) + (ax >> 7))) | (t * (t >> (10 + (ay >> 9))))", 8000, MODE_BYTEBEAT},
         {"s(t * (100 + ax * 150) * 0.01)", 48000, MODE_FLOATBEAT},                                                                 
         {"(r() - 0.5) * min(1.0, abs(gx) * 0.02)", 48000, MODE_FLOATBEAT},                                             
         {"s(t * (0.015 + abs(gy) * 0.0001)) * (0.2 + abs(gy) * 0.01)", 48000, MODE_FLOATBEAT},                                               
@@ -104,7 +104,7 @@ const PresetConfig defaultBanks[10][10] = {
         {"v+=(((1.0-my)+ay)-v)*0.001, p+=((mx+ax)-p)*0.001, ph+=(1000.0+p*6000+sin(t*6.0*tau/sr)*0.5)*tau/sr, sin(ph)*(v>0?v:0)*2.5", 8000, MODE_FLOATBEAT}, 
         {"b=.001,px+=(ax-px)*b,vy+=(ay-vy)*b,mz+=(az-mz)*b,vx+=(gx-vx)*b,ty+=(gy-ty)*b,fz+=(gz-fz)*b,ph+=(300+px*400+s(t*6*tau/sr)*vx*50)*tau/sr,s(ph+s(ph*(mz*2+1))*fz*1.5)*(vy>-1?vy+1:0)*.25*(1-ty*.5*s(t*10*tau/sr))", 48000, MODE_FLOATBEAT},                                         
         {"b=.005,g=gx*gx+gy*gy+gz*gz,sw+=(g-sw)*b,ph+=(60+ax*5+sw*120)*tau/sr,s(ph+s(ph*2.01)*.6+sw*s(ph*4.5))*(.3+sw*.5)", 48000, MODE_FLOATBEAT},                                         
-        {"b=.003,g=gx*gx+gy*gy+gz*gz,w+=(g-w)*b,ph+=(1500+ax*200+w*1200)*tau/sr,(s(ph+s(ph*1.14)*(1+w*4)+s(ph*.87)*w*6)+s(ph*27.3)*.1)*w*.4", 48000, MODE_FLOATBEAT}                                                  
+        {"pc(ax)*t*on(0b101110)", 8000, MODE_BYTEBEAT}                                             
     },
     
     // BANK 6: MONOPHONIC MIDI (mf & mg parameters)
